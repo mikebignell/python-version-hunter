@@ -15,7 +15,7 @@ from rich.panel import Panel
 from rich.rule import Rule
 from rich import box
 
-from pyhunter.actions import _run_visible, _pip_in_venv, upgrade_venv
+from pyhunter.actions import _run_visible, _pip_in_venv, upgrade_venv, ensure_ssl_certs, _reinstall_packages
 from pyhunter.finder import PythonInstall, _SCAN_ERRORS, _SCAN_SKIP_DIRS, get_pip_packages
 
 
@@ -259,14 +259,8 @@ def upgrade_venv_with_pip(
     console: Console,
     dry_run: bool = False,
 ) -> bool:
-    """Recreate a venv then upgrade pip inside it."""
-    ok = upgrade_venv(install, target_python, console, dry_run=dry_run)
-    if ok and not dry_run and install.venv_base:
-        pip = _pip_in_venv(install.venv_base)
-        if pip.exists():
-            console.print("[bright_cyan]  Upgrading pip…[/bright_cyan]")
-            _run_visible([str(pip), "install", "--quiet", "--upgrade", "pip"], console)
-    return ok
+    """Recreate a venv (upgrade_venv already handles pip bump and SSL certs)."""
+    return upgrade_venv(install, target_python, console, dry_run=dry_run)
 
 
 def repair_broken_venv(
@@ -303,13 +297,13 @@ def repair_broken_venv(
         console.print(f"  [bright_red]Failed to recreate {broken.venv_base}[/bright_red]")
         return False
 
-    if packages:
-        pip = _pip_in_venv(broken.venv_base)
-        _run_visible([str(pip), "install", "--quiet", "-r", str(req_backup)], console)
+    ensure_ssl_certs(Path(new_python), console)
 
     pip = _pip_in_venv(broken.venv_base)
-    if pip.exists():
-        _run_visible([str(pip), "install", "--quiet", "--upgrade", "pip"], console)
+    _run_visible([str(pip), "install", "--quiet", "--upgrade", "pip"], console)
+
+    if packages:
+        _reinstall_packages(pip, packages, req_backup, console)
 
     console.print(f"  [bright_green]✓ Repaired.[/bright_green]")
     return True

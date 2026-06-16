@@ -1,6 +1,7 @@
 """Upgrade and deletion actions for Python installations."""
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 import sys
@@ -22,6 +23,137 @@ def _run_visible(cmd: list[str], console: Console) -> bool:
     except (FileNotFoundError, PermissionError) as exc:
         console.print(f"[bright_red]Error: {exc}[/bright_red]")
         return False
+
+
+def _run_capturing(cmd: list[str]) -> tuple[int, str, str]:
+    """Run a command capturing stdout+stderr; return (returncode, stdout, stderr)."""
+    try:
+        result = subprocess.run(cmd, text=True, capture_output=True)
+        return result.returncode, result.stdout, result.stderr
+    except (FileNotFoundError, PermissionError) as exc:
+        return 1, "", str(exc)
+
+
+# ── python.org Framework SSL cert installation ────────────────────────────────
+
+def _is_framework_python(python_path: Path) -> bool:
+    return "/Library/Frameworks/Python.framework" in str(python_path)
+
+
+def ensure_ssl_certs(python_path: Path, console: Console) -> None:
+    """
+    Python.org macOS installers ship without CA certificates wired up.
+    Run the bundled Install Certificates.command if present, otherwise
+    install certifi and patch the ssl module.
+    """
+    if not _is_framework_python(python_path):
+        return
+
+    # Quick check: can the Python actually verify a cert?
+    rc, _, _ = _run_capturing([
+        str(python_path), "-c",
+        "import urllib.request; urllib.request.urlopen('https://pypi.org', timeout=5)"
+    ])
+    if rc == 0:
+        return  # certs already work
+
+    console.print(
+        "[bright_yellow]  ⚠  python.org Framework Python detected — SSL certificates not configured.[/bright_yellow]"
+    )
+
+    # Try the bundled installer first
+    ver_match = re.search(r"Python\.framework/Versions/(\d+\.\d+)", str(python_path))
+    if ver_match:
+        cert_cmd = Path(f"/Applications/Python {ver_match.group(1)}/Install Certificates.command")
+        if cert_cmd.exists():
+            console.print(f"  [bright_cyan]Running cert installer: {cert_cmd}[/bright_cyan]")
+            _run_visible(["bash", str(cert_cmd)], console)
+            return
+
+    # Fallback: install certifi and patch ssl
+    console.print("  [bright_cyan]Installing certifi as SSL cert fallback…[/bright_cyan]")
+    _run_visible([str(python_path), "-m", "pip", "install", "--quiet", "--upgrade", "certifi"], console)
+    # Apply the certifi cert path at runtime via REQUESTS_CA_BUNDLE and SSL_CERT_FILE
+    console.print(
+        "  [bright_yellow]Note: add to your shell: "
+        "export SSL_CERT_FILE=$(python3 -c 'import certifi; print(certifi.where())')"
+        "[/bright_yellow]"
+    )
+
+
+# ── Package reinstall with fallback ──────────────────────────────────────────
+
+def _reinstall_packages(
+    pip: Path,
+    packages: list[str],
+    req_backup: Path,
+    console: Console,
+) -> None:
+    """
+    Install pinned requirements. For any package that fails (e.g. no wheel
+    for this Python version), retry without the version pin to get the latest.
+    """
+    console.print(f"[bright_yellow]Reinstalling {len(packages)} package(s)…[/bright_yellow]")
+    rc, stdout, stderr = _run_capturing([str(pip), "install", "--quiet", "-r", str(req_backup)])
+
+    if rc == 0:
+        console.print("[bright_green]  ✓ All packages reinstalled.[/bright_green]")
+        return
+
+    # Parse which packages failed from pip's error output
+    failed_names = _extract_failed_packages(stderr + stdout)
+
+    if not failed_names:
+        console.print(
+            f"[bright_yellow]  ⚠ Some packages may not have installed. "
+            f"Check {req_backup}[/bright_yellow]"
+        )
+        return
+
+    console.print(
+        f"  [bright_yellow]⚠ {len(failed_names)} package(s) failed with pinned version, "
+        f"retrying without version constraint:[/bright_yellow]"
+    )
+
+    retried_ok: list[str] = []
+    retried_fail: list[str] = []
+
+    for name in failed_names:
+        console.print(f"  [bright_cyan]  → {name}[/bright_cyan]")
+        rc2, _, _ = _run_capturing([str(pip), "install", "--quiet", name])
+        if rc2 == 0:
+            retried_ok.append(name)
+        else:
+            retried_fail.append(name)
+
+    if retried_ok:
+        console.print(
+            f"  [bright_green]  ✓ Installed latest: {', '.join(retried_ok)}[/bright_green]"
+        )
+    if retried_fail:
+        console.print(
+            f"  [bright_red]  ✗ Could not install: {', '.join(retried_fail)}[/bright_red]\n"
+            f"    Install manually: pip install {' '.join(retried_fail)}"
+        )
+
+
+def _extract_failed_packages(output: str) -> list[str]:
+    """Extract package names from pip error output."""
+    names: list[str] = []
+    # "× Preparing metadata ... did not run successfully" with package name on next context line
+    # "error: metadata-generation-failed\n× Encountered error while generating package metadata.\n╰─> <name>"
+    for pattern in [
+        r"╰─>\s+(\S+)",                  # pip metadata error arrow
+        r"error in (\S+) setup command",  # older pip
+        r"Failed to build (\S+)",
+        r"Could not build wheels for (\S+)",
+        r"ERROR: Could not find a version.*for (\S+)",
+    ]:
+        for m in re.finditer(pattern, output, re.IGNORECASE):
+            name = m.group(1).strip().rstrip(".,;")
+            if name and name not in names:
+                names.append(name)
+    return names
 
 
 def _pip_in_venv(venv_path: Path) -> Path:
@@ -69,15 +201,14 @@ def upgrade_venv(
         console.print("[bright_red]Failed to create new venv.[/bright_red]")
         return False
 
+    # Fix SSL certs for python.org Framework Pythons before running pip
+    ensure_ssl_certs(Path(new_python), console)
+
+    pip = _pip_in_venv(venv_path)
+    _run_visible([str(pip), "install", "--quiet", "--upgrade", "pip"], console)
+
     if packages:
-        pip = _pip_in_venv(venv_path)
-        console.print(f"[bright_yellow]Reinstalling {len(packages)} package(s)…[/bright_yellow]")
-        ok = _run_visible([str(pip), "install", "--quiet", "-r", str(req_backup)], console)
-        if not ok:
-            console.print(
-                f"[bright_yellow]Some packages may not have installed. "
-                f"Check {req_backup}[/bright_yellow]"
-            )
+        _reinstall_packages(pip, packages, req_backup, console)
 
     console.print("[bright_green]✓ Venv upgraded successfully.[/bright_green]")
     return True
