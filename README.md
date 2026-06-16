@@ -15,6 +15,7 @@
 [![CI](https://github.com/mikebignell/python-version-hunter/actions/workflows/ci.yml/badge.svg)](https://github.com/mikebignell/python-version-hunter/actions/workflows/ci.yml)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-brightgreen)](https://www.python.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-cyan.svg)](LICENSE)
+[![Vibe coded](https://img.shields.io/badge/vibe_coded-100%25_Claude-%23d97757?logo=anthropic)](https://claude.ai/claude-code)
 
 ---
 
