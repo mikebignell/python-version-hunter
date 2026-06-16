@@ -409,17 +409,22 @@ def repair_broken_venv(
     dry_run: bool = False,
 ) -> bool:
     """Recreate a broken venv (source Python gone) with the target Python."""
+    from pyhunter.finder import get_version
     new_python = str(target_python) if target_python else sys.executable
+    new_ver_result = get_version(Path(new_python))
+    new_ver_str = new_ver_result[1] if new_ver_result else new_python
+    old_ver_str = broken.python_version or "unknown"
+
     console.print(
         f"\n[bright_yellow]Repairing broken venv:[/bright_yellow] {broken.venv_base}\n"
-        f"  [dim]Missing source: {broken.missing_home}[/dim]\n"
-        f"  [bright_cyan]New Python:[/bright_cyan] {new_python}"
+        f"  [dim]{old_ver_str}[/dim] [bright_red](source deleted)[/bright_red]"
+        f"  [bright_cyan]→[/bright_cyan]  [bright_green]{new_ver_str}[/bright_green]"
     )
 
     # Read packages before deleting
     packages = get_pip_packages(broken.venv_base)
     if packages:
-        console.print(f"  [bright_cyan]Preserving {len(packages)} package(s)[/bright_cyan]")
+        console.print(f"  [dim]{len(packages)} package(s) will be preserved[/dim]")
 
     if dry_run:
         console.print(f"  [bright_yellow][DRY RUN] Would recreate {broken.venv_base}[/bright_yellow]")

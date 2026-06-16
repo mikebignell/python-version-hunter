@@ -505,6 +505,7 @@
       <li>For python.org Framework Pythons (<code>/Library/Frameworks/…</code>), runs the bundled SSL certificate installer before pip — prevents build failures on packages like matplotlib that download dependencies</li>
       <li>Upgrades pip itself, then reinstalls all packages</li>
       <li>If a pinned version has no wheel for the new Python, automatically retries with the latest available version and reports what was upgraded</li>
+      <li>Each upgrade line shows <strong>old version → new version</strong> with the old version's compliance status, so you can tally the output directly against a compliance report</li>
     </ul>
     <p style="margin-top:0.75rem; color: var(--yellow);">
       ⚠ Package compatibility is not guaranteed across Python versions. Review the backup file if any packages could not be installed.

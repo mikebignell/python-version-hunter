@@ -11,7 +11,7 @@ from typing import Optional
 from rich.console import Console
 from rich.prompt import Confirm
 
-from pyhunter.finder import PythonInstall, get_pip_packages
+from pyhunter.finder import PythonInstall, get_pip_packages, get_version
 
 
 def _run_visible(cmd: list[str], console: Console) -> bool:
@@ -175,17 +175,24 @@ def upgrade_venv(
         return False
 
     venv_path = install.venv_base
-    console.print(f"\n[bright_cyan]Upgrading venv:[/bright_cyan] {venv_path}")
+    new_python = str(target_python) if target_python else sys.executable
+
+    # Resolve new Python version string for clear compliance output
+    new_ver_result = get_version(Path(new_python))
+    new_ver_str = new_ver_result[1] if new_ver_result else new_python
+
+    console.print(
+        f"\n[bright_cyan]Upgrading venv:[/bright_cyan] {venv_path}\n"
+        f"  [dim]{install.version_str}[/dim] [{install.status_color}]({install.status_label})[/{install.status_color}]"
+        f"  [bright_cyan]→[/bright_cyan]  [bright_green]{new_ver_str}[/bright_green]"
+    )
 
     packages = get_pip_packages(venv_path)
     if packages:
-        console.print(f"[bright_cyan]Found {len(packages)} package(s) to preserve.[/bright_cyan]")
-
-    new_python = str(target_python) if target_python else sys.executable
-    console.print(f"[bright_cyan]New Python:[/bright_cyan] {new_python}")
+        console.print(f"  [dim]{len(packages)} package(s) will be preserved[/dim]")
 
     if dry_run:
-        console.print("[bright_yellow][DRY RUN] Would recreate venv and reinstall packages.[/bright_yellow]")
+        console.print("[bright_yellow]  [DRY RUN] Would recreate venv and reinstall packages.[/bright_yellow]")
         return True
 
     req_backup = venv_path.parent / f"{venv_path.name}_requirements_backup.txt"
