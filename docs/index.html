@@ -405,6 +405,11 @@
         <span class="feature-desc">Detects venvs whose source Python was silently deleted (e.g. after a brew upgrade) and rebuilds them.</span>
       </div>
       <div class="feature-card">
+        <span class="feature-icon">🧹</span>
+        <span class="feature-name">SAFE CELLAR CLEANUP</span>
+        <span class="feature-desc">Removes stale Python versions from the Homebrew Cellar — but upgrades any venvs that still reference them first.</span>
+      </div>
+      <div class="feature-card">
         <span class="feature-icon">🕹️</span>
         <span class="feature-name">INTERACTIVE MODE</span>
         <span class="feature-desc">Step through each problem installation and decide: upgrade, delete, suggest, or skip.</span>
@@ -434,6 +439,8 @@
 <span class="prompt">$</span> <span class="cmd">pyhunter --interactive</span>           <span class="out"># decide for each issue</span>
 
 <span class="prompt">$</span> <span class="cmd">pyhunter --upgrade-venvs</span>         <span class="out"># auto-upgrade all EOL venvs</span>
+
+<span class="prompt">$</span> <span class="cmd">pyhunter --brew-cleanup</span>          <span class="out"># safely remove stale Cellar Pythons</span>
 
 <span class="prompt">$</span> <span class="cmd">pyhunter --full-auto</span>             <span class="out"># fix everything in one shot</span>
 
@@ -481,8 +488,9 @@
       <li><strong>Step 3 — Broken venv scan:</strong> finds venvs whose source Python has been deleted from disk — this happens silently after every <code>brew upgrade</code> or macOS update</li>
       <li><strong>Step 4 — Broken venv repair:</strong> recreates each broken venv with the new Python, restoring all packages</li>
       <li><strong>Step 5 — Upgrade out-of-date venvs:</strong> recreates every venv on an old cycle or patch, then upgrades pip inside each one</li>
-      <li><strong>Step 6 — PATH shadowing check:</strong> verifies <code>which python3</code> resolves to Homebrew, not <code>/usr/bin/python3</code></li>
-      <li><strong>Step 7 — Shell config check:</strong> warns if <code>brew shellenv</code> is missing from <code>~/.zshrc</code> / <code>~/.bash_profile</code>; also scans for <code>.python-version</code> files pinning EOL versions</li>
+      <li><strong>Step 6 — Homebrew Cellar cleanup:</strong> checks for any remaining venvs still referencing old Cellar paths, upgrades them, then runs <code>brew cleanup</code> to free disk space</li>
+      <li><strong>Step 7 — PATH shadowing check:</strong> verifies <code>which python3</code> resolves to Homebrew, not <code>/usr/bin/python3</code></li>
+      <li><strong>Step 8 — Shell config check:</strong> warns if <code>brew shellenv</code> is missing from <code>~/.zshrc</code> / <code>~/.bash_profile</code>; also scans for <code>.python-version</code> files pinning EOL versions</li>
     </ul>
   </section>
 
@@ -494,10 +502,12 @@
       <li>Backs up requirements to <code>&lt;venv_name&gt;_requirements_backup.txt</code></li>
       <li>Deletes the old venv directory</li>
       <li>Creates a new venv with the target Python</li>
-      <li>Reinstalls all packages + upgrades pip</li>
+      <li>For python.org Framework Pythons (<code>/Library/Frameworks/…</code>), runs the bundled SSL certificate installer before pip — prevents build failures on packages like matplotlib that download dependencies</li>
+      <li>Upgrades pip itself, then reinstalls all packages</li>
+      <li>If a pinned version has no wheel for the new Python, automatically retries with the latest available version and reports what was upgraded</li>
     </ul>
     <p style="margin-top:0.75rem; color: var(--yellow);">
-      ⚠ Package compatibility is not guaranteed across Python versions. Review the backup file if reinstall has issues.
+      ⚠ Package compatibility is not guaranteed across Python versions. Review the backup file if any packages could not be installed.
     </p>
   </section>
 

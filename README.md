@@ -86,8 +86,11 @@ Walks you through each non-compliant installation one at a time.
 pyhunter --upgrade-venvs
 ```
 
-Finds every virtual environment using an old Python and recreates it with a newer one —
-packages are preserved via `pip freeze` + reinstall.
+Finds every virtual environment using an old Python and recreates it with a newer one.
+Packages are preserved via `pip freeze` + reinstall. If a pinned version has no wheel for
+the new Python, it retries with the latest available version and reports what changed.
+For python.org Framework Pythons (`/Library/Frameworks/…`), SSL certificates are
+automatically configured before pip runs so builds don't fail.
 
 Specify a target Python explicitly:
 
@@ -108,10 +111,11 @@ This orchestrates a complete remediation in order:
 1. **`brew upgrade python`** — upgrades all Homebrew Python formulae to the latest
 2. **`pyenv install <latest>`** — installs the newest Python if you use pyenv
 3. **Broken venv repair** — finds venvs whose source Python was deleted (e.g. after a brew upgrade) and recreates them
-4. **Upgrade all out-of-date venvs** — recreates every venv on an old cycle/patch with the new Python, preserving packages + upgrading pip
-5. **PATH shadowing check** — verifies Homebrew Python comes before `/usr/bin/python3`
-6. **Shell config check** — warns if `brew shellenv` is missing from `.zshrc`/`.bash_profile`
-7. **`.python-version` scan** — flags pyenv pin files that point at EOL versions
+4. **Upgrade all out-of-date venvs** — recreates every venv on an old cycle/patch, preserving packages + upgrading pip
+5. **Homebrew Cellar cleanup** — upgrades any remaining venvs referencing old Cellar paths, then runs `brew cleanup`
+6. **PATH shadowing check** — verifies Homebrew Python comes before `/usr/bin/python3`
+7. **Shell config check** — warns if `brew shellenv` is missing from `.zshrc`/`.bash_profile`
+8. **`.python-version` scan** — flags pyenv pin files that point at EOL versions
 
 Skip the confirmation prompt:
 
@@ -125,6 +129,19 @@ Preview without making changes:
 pyhunter --full-auto --dry-run
 ```
 
+### Homebrew Cellar cleanup
+
+Remove old Python versions left in the Cellar after `brew upgrade`:
+
+```bash
+pyhunter --brew-cleanup
+pyhunter --brew-cleanup --dry-run   # preview what would be removed
+```
+
+This is safer than running `brew cleanup` directly — the tool first checks whether any of your venvs still reference the old Cellar paths, upgrades them to the new Python, *then* runs `brew cleanup`. This avoids silently broken venvs.
+
+`--brew-cleanup` is also included automatically in `--full-auto`.
+
 ### Dry run
 
 Preview everything without making changes:
@@ -132,6 +149,7 @@ Preview everything without making changes:
 ```bash
 pyhunter --upgrade-venvs --dry-run
 pyhunter --interactive --dry-run
+pyhunter --brew-cleanup --dry-run
 ```
 
 ### Extra scan paths
@@ -153,7 +171,8 @@ pyhunter --scan-path ~/Projects --scan-path ~/work
 | `--target-python PATH` | `-t` | Python to use when recreating venvs |
 | `--dry-run` | `-n` | Preview changes without applying them |
 | `--no-venvs` | | Skip virtual environment scanning |
-| `--full-auto` | `-A` | Full automated remediation (upgrade, repair, verify) |
+| `--brew-cleanup` | | Remove stale Homebrew Cellar Pythons (upgrades dependent venvs first) |
+| `--full-auto` | `-A` | Full automated remediation (upgrade, repair, verify, cleanup) |
 | `--yes` | `-y` | Skip confirmation prompts (use with `--full-auto`) |
 | `--version` | `-V` | Show version and exit |
 
