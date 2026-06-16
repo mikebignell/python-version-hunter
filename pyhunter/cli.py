@@ -26,7 +26,7 @@ from pyhunter.actions import (
     suggest_pyenv_upgrade,
     upgrade_venv,
 )
-from pyhunter.auto import run_full_auto
+from pyhunter.auto import run_full_auto, brew_cleanup_old_pythons
 from pyhunter.finder import find_all_pythons, PythonInstall
 from pyhunter.versions import CycleInfo, fetch_release_info, latest_patch_for, latest_stable_version
 from pyhunter.ui import (
@@ -209,6 +209,16 @@ def main(
         bool,
         typer.Option("--no-venvs", help="Skip virtual environment scanning."),
     ] = False,
+    brew_cleanup: Annotated[
+        bool,
+        typer.Option(
+            "--brew-cleanup",
+            help=(
+                "Remove stale Python versions from the Homebrew Cellar. "
+                "Upgrades any venvs that still reference them before cleaning."
+            ),
+        ),
+    ] = False,
     full_auto: Annotated[
         bool,
         typer.Option(
@@ -294,6 +304,17 @@ def main(
     # -- Interactive review --
     if interactive:
         _interactive_review(installs, console, dry_run=dry_run)
+
+    # -- Brew Cellar cleanup --
+    if brew_cleanup:
+        print_action_header("BREW CLEANUP — STALE CELLAR PYTHONS", console)
+        brew_cleanup_old_pythons(
+            venv_search_paths=venv_paths,
+            target_python=target_python or _best_python(installs),
+            console=console,
+            dry_run=dry_run,
+        )
+        console.print()
 
     # -- Full auto mode --
     if full_auto:

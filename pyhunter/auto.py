@@ -231,6 +231,145 @@ def brew_upgrade_python(console: Console, dry_run: bool = False) -> bool:
     return _run_visible([brew, "upgrade"] + formulae, console)
 
 
+# ── Homebrew Cellar cleanup ───────────────────────────────────────────────────
+
+def _brew_stale_cellar_paths(console: Console) -> list[Path]:
+    """Return Cellar paths that `brew cleanup --dry-run` would remove."""
+    brew = shutil.which("brew")
+    if not brew:
+        return []
+    result = subprocess.run(
+        [brew, "cleanup", "--dry-run"],
+        capture_output=True, text=True,
+    )
+    paths: list[Path] = []
+    for line in result.stdout.splitlines():
+        # Lines look like: "Removing python@3.14: 3.14.5 ..."  or just the path
+        m = re.match(r".*(/opt/homebrew/Cellar/\S+|/usr/local/Cellar/\S+)", line)
+        if m:
+            p = Path(m.group(1))
+            if p.exists():
+                paths.append(p)
+    return paths
+
+
+def brew_cleanup_old_pythons(
+    venv_search_paths: list[Path],
+    target_python: Optional[Path],
+    console: Console,
+    dry_run: bool = False,
+) -> None:
+    """
+    Run `brew cleanup` for Python formulae, but only after ensuring no venv
+    still references the Cellar paths that would be removed.
+    """
+    brew = shutil.which("brew")
+    if not brew:
+        console.print("  [bright_yellow]Homebrew not found — skipping.[/bright_yellow]")
+        return
+
+    stale_paths = _brew_stale_cellar_paths(console)
+    python_stale = [p for p in stale_paths if "python" in p.parts[-3].lower()]
+
+    if not python_stale:
+        console.print("  [bright_green]✓ No stale Python Cellar entries to clean up.[/bright_green]")
+        return
+
+    console.print(f"  [bright_cyan]Stale Cellar entries found:[/bright_cyan]")
+    for p in python_stale:
+        console.print(f"    [dim]{p}[/dim]")
+
+    # Cross-reference: any venv whose pyvenv.cfg home= lives inside a stale path?
+    at_risk: list[BrokenVenv] = []
+    for venv_root in venv_search_paths:
+        for bv in find_broken_venvs([venv_root]):
+            for stale in python_stale:
+                try:
+                    bv.missing_home.relative_to(stale)
+                    at_risk.append(bv)
+                    break
+                except ValueError:
+                    pass
+
+    # Also scan live venvs
+    live_at_risk: list[Path] = []
+    for venv_root in venv_search_paths:
+        def _check_venv(path: Path, depth: int) -> None:
+            if depth > 5:
+                return
+            try:
+                cfg = path / "pyvenv.cfg"
+                if cfg.is_file():
+                    data = _parse_pyvenv_cfg(cfg)
+                    home = data.get("home")
+                    if home:
+                        for stale in python_stale:
+                            try:
+                                Path(home).relative_to(stale)
+                                live_at_risk.append(path.resolve())
+                                return
+                            except ValueError:
+                                pass
+                    return
+                for entry in path.iterdir():
+                    try:
+                        if (
+                            entry.is_dir()
+                            and not entry.name.startswith(".")
+                            and not entry.is_symlink()
+                            and entry.name not in _SCAN_SKIP_DIRS
+                        ):
+                            _check_venv(entry, depth + 1)
+                    except _SCAN_ERRORS:
+                        continue
+            except _SCAN_ERRORS:
+                pass
+        if venv_root.is_dir():
+            _check_venv(venv_root, 0)
+
+    if live_at_risk:
+        console.print(
+            f"\n  [bright_yellow]⚠  {len(live_at_risk)} venv(s) still reference stale Cellar paths "
+            f"— upgrading before cleanup:[/bright_yellow]"
+        )
+        from pyhunter.finder import PythonInstall, scan_venvs
+        venv_results = scan_venvs(venv_search_paths)
+        for venv_path in live_at_risk:
+            matches = [
+                (py_path, venv_base, ver_str, install_type)
+                for py_path, venv_base, ver_str, install_type in venv_results
+                if venv_base == venv_path
+            ]
+            if matches:
+                py_path, venv_base, ver_str, install_type = matches[0]
+                ver_tuple = tuple(int(x) for x in ver_str.split(".")) if ver_str else (0, 0, 0)
+                inst = PythonInstall(
+                    path=py_path,
+                    version=ver_tuple,
+                    version_str=ver_str or "?",
+                    install_type=install_type,
+                    venv_base=venv_base,
+                )
+                upgrade_venv_with_pip(inst, target_python, console, dry_run=dry_run)
+            else:
+                # Repair it as a broken venv
+                repair_broken_venv(
+                    BrokenVenv(venv_base=venv_path, missing_home=Path("/stale"), python_version=None),
+                    target_python, console, dry_run=dry_run,
+                )
+
+    if dry_run:
+        console.print(
+            f"\n  [bright_yellow][DRY RUN] Would run: brew cleanup[/bright_yellow]\n"
+            f"  [dim]({len(python_stale)} stale Python Cellar entries would be removed)[/dim]"
+        )
+        return
+
+    console.print("\n  [bright_cyan]Running brew cleanup…[/bright_cyan]")
+    _run_visible([brew, "cleanup"], console)
+    console.print("  [bright_green]✓ Cellar cleaned.[/bright_green]")
+
+
 # ── pyenv upgrade ─────────────────────────────────────────────────────────────
 
 def pyenv_install_latest(latest: str, console: Console, dry_run: bool = False) -> bool:
@@ -351,6 +490,9 @@ def run_full_auto(
     step += 1
     console.print(f"  [bright_green]{step}.[/bright_green] Upgrade {len(venvs_to_fix)} out-of-date venv(s) + pip")
     step += 1
+    if has_brew:
+        console.print(f"  [bright_green]{step}.[/bright_green] brew cleanup  (remove stale Cellar Pythons, upgrade any venvs that reference them first)")
+        step += 1
     console.print(f"  [bright_green]{step}.[/bright_green] Check PATH shadowing (Homebrew before /usr/bin)")
     step += 1
     console.print(f"  [bright_green]{step}.[/bright_green] Check shell config & .python-version files")
@@ -422,6 +564,11 @@ def run_full_auto(
             upgrade_venv_with_pip(inst, target_python, console, dry_run=dry_run)
     else:
         console.print("  [bright_green]✓ All venvs are already up to date.[/bright_green]")
+
+    # ── Brew cleanup ──────────────────────────────────────────────────────
+    if has_brew:
+        _header("STEP: BREW CLEANUP — STALE CELLAR PYTHONS")
+        brew_cleanup_old_pythons(venv_search_paths, target_python, console, dry_run=dry_run)
 
     # ── Step 6: PATH check ────────────────────────────────────────────────
     _header("STEP: PATH SHADOWING CHECK")
