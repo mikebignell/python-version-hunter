@@ -488,7 +488,19 @@ def find_all_pythons(
 
         seen_resolved.add(resolved)
         version, version_str = version_info
+
         venv_base = venv_map.get(resolved) or venv_map.get(path)
+
+        # venv_map is keyed by the one executable scan_venvs happened to find
+        # (e.g. bin/python3).  If PATH also exposed a sibling in the same venv
+        # bin dir (e.g. bin/python3.14), the map lookup above will miss it.
+        # Walk parents to catch that case.
+        if venv_base is None:
+            for parent in resolved.parents:
+                if (parent / "pyvenv.cfg").exists():
+                    venv_base = parent
+                    break
+
         install_type = "venv" if venv_base else _classify_path(resolved)
 
         installs.append(

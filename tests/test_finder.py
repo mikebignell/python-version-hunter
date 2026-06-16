@@ -339,6 +339,66 @@ class TestRecommendationWithPatch:
         assert inst.recommendation == "KEEP"
 
 
+class TestVenvDetectionViaParentCfg:
+    """Regression: Python binaries inside a venv dir must be detected as venvs
+    even when scan_venvs found a sibling executable (e.g. python3 vs python3.14)."""
+
+    def test_find_all_pythons_classifies_venv_sibling_as_venv(self, tmp_path):
+        from unittest.mock import patch as _patch
+        from pyhunter.finder import find_all_pythons
+
+        # Create a minimal fake venv structure
+        venv = tmp_path / "myenv"
+        bin_dir = venv / "bin"
+        bin_dir.mkdir(parents=True)
+        (venv / "pyvenv.cfg").write_text("home = /usr/bin\nversion = 3.12.0\n")
+
+        # python3 — the one scan_venvs would find
+        py3 = bin_dir / "python3"
+        py3.write_text("#!/bin/sh\necho 'Python 3.12.0'\n")
+        py3.chmod(0o755)
+
+        # python3.12 — a sibling exposed on PATH that scan_venvs wouldn't map
+        py312 = bin_dir / "python3.12"
+        py312.write_text("#!/bin/sh\necho 'Python 3.12.0'\n")
+        py312.chmod(0o755)
+
+        with _patch("pyhunter.finder.scan_path_executables", return_value=[py312]), \
+             _patch("pyhunter.finder.scan_common_dirs", return_value=[]), \
+             _patch("pyhunter.finder.scan_venvs", return_value=[(py3.resolve(), venv.resolve())]), \
+             _patch("pyhunter.finder.get_version", return_value=((3, 12, 0), "3.12.0")):
+            installs = find_all_pythons(venv_search_paths=[tmp_path])
+
+        # Both py3 and py312 resolve differently — only one deduped entry expected
+        # but critically: it must be marked as a venv
+        venv_installs = [i for i in installs if i.venv_base is not None]
+        assert len(venv_installs) >= 1, "sibling python3.12 inside venv dir not detected as venv"
+
+    def test_best_python_excludes_path_inside_venv_dir(self, tmp_path):
+        from pyhunter.cli import _best_python, _is_inside_venv_dir
+
+        # Simulate the venv dir
+        venv = tmp_path / ".venv"
+        venv.mkdir()
+        (venv / "pyvenv.cfg").write_text("home = /opt/homebrew/bin\n")
+        venv_python = venv / "bin" / "python3.14"
+        (venv / "bin").mkdir()
+        venv_python.touch()
+
+        assert _is_inside_venv_dir(venv_python) is True
+
+        # Build a fake install list where the venv Python slipped through as non-venv
+        inst = PythonInstall(
+            path=venv_python,
+            version=(3, 14, 5),
+            version_str="3.14.5",
+            install_type="unknown",
+            venv_base=None,   # the bug: venv_base not set
+            is_current=False,
+        )
+        assert _best_python([inst]) is None, "_best_python should not select a Python inside a venv dir"
+
+
 class TestVersionSets:
     def test_python39_in_eol(self):
         assert (3, 9) in EOL_VERSIONS

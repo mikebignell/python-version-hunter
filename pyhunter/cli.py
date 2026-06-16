@@ -47,11 +47,22 @@ app = typer.Typer(
 )
 
 
+def _is_inside_venv_dir(path: Path) -> bool:
+    """True if any parent of path contains pyvenv.cfg — i.e. it lives inside a venv."""
+    for parent in path.parents:
+        if (parent / "pyvenv.cfg").exists():
+            return True
+    return False
+
+
 def _best_python(installs: list[PythonInstall]) -> Optional[Path]:
     """Return the path to the highest supported, non-venv Python found."""
     candidates = [
         i for i in installs
-        if not i.is_venv and not i.is_current and i.status == "supported"
+        if not i.is_venv
+        and not i.is_current
+        and i.status == "supported"
+        and not _is_inside_venv_dir(i.path)  # guard against venv Pythons missed by scanner
     ]
     if not candidates:
         return None
