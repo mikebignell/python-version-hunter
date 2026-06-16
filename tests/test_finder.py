@@ -232,6 +232,65 @@ class TestCrossPlatformPaths:
         assert _classify_path(Path("/home/user/miniconda3/envs/ml/bin/python3")) == "conda"
 
 
+class TestHasNewerPatch:
+    def test_no_latest_patch_set(self):
+        assert not _make_install(3, 12).has_newer_patch
+
+    def test_on_latest_patch(self):
+        inst = _make_install(3, 12, 10)
+        inst.latest_patch = "3.12.10"
+        assert not inst.has_newer_patch
+
+    def test_behind_latest_patch(self):
+        inst = _make_install(3, 12, 3)
+        inst.latest_patch = "3.12.10"
+        assert inst.has_newer_patch
+
+    def test_ahead_of_latest_patch(self):
+        # e.g. pre-release or local build
+        inst = _make_install(3, 12, 99)
+        inst.latest_patch = "3.12.10"
+        assert not inst.has_newer_patch
+
+    def test_bad_latest_patch_string(self):
+        inst = _make_install(3, 12, 3)
+        inst.latest_patch = "not-a-version"
+        assert not inst.has_newer_patch
+
+
+class TestRecommendationWithPatch:
+    def test_supported_with_newer_patch_recommends_update(self):
+        inst = _make_install(3, 12, 3)
+        inst.latest_patch = "3.12.10"
+        assert inst.recommendation == "UPDATE PATCH"
+
+    def test_supported_on_latest_recommends_keep(self):
+        inst = _make_install(3, 12, 10)
+        inst.latest_patch = "3.12.10"
+        assert inst.recommendation == "KEEP"
+
+    def test_supported_venv_with_newer_patch_recommends_upgrade_venv(self):
+        inst = _make_install(3, 12, 3, venv_base=Path("/some/venv"))
+        inst.latest_patch = "3.12.10"
+        assert inst.recommendation == "UPGRADE VENV"
+
+    def test_security_on_latest_recommends_consider_upgrade(self):
+        inst = _make_install(3, 10, 17)
+        inst.latest_patch = "3.10.17"
+        assert inst.recommendation == "CONSIDER UPGRADE"
+
+    def test_security_with_newer_patch_recommends_update(self):
+        inst = _make_install(3, 10, 5)
+        inst.latest_patch = "3.10.17"
+        assert inst.recommendation == "UPDATE PATCH"
+
+    def test_os_managed_with_newer_patch_recommends_pkg_mgr(self):
+        inst = _make_install(3, 9)
+        inst.path = Path("/usr/bin/python3")
+        inst.latest_patch = "3.9.25"
+        assert inst.recommendation == "UPDATE VIA PKG MGR"
+
+
 class TestVersionSets:
     def test_python39_in_eol(self):
         assert (3, 9) in EOL_VERSIONS

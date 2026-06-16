@@ -21,11 +21,12 @@ from pyhunter.actions import (
     advise_clt_update,
     delete_python,
     suggest_brew_upgrade,
+    suggest_patch_update,
     suggest_pyenv_upgrade,
     upgrade_venv,
 )
 from pyhunter.finder import find_all_pythons, PythonInstall
-from pyhunter.versions import CycleInfo, fetch_release_info
+from pyhunter.versions import CycleInfo, fetch_release_info, latest_patch_for
 from pyhunter.ui import (
     make_console,
     make_results_table,
@@ -81,7 +82,7 @@ def _scan_with_progress(
 
 def _interactive_review(installs: list[PythonInstall], console, dry_run: bool) -> None:
     """Walk the user through each non-OK installation one at a time."""
-    issues = [i for i in installs if i.status != "supported" or i.is_python2]
+    issues = [i for i in installs if i.status != "supported" or i.has_newer_patch or i.is_python2]
     if not issues:
         print_no_issues(console)
         return
@@ -109,12 +110,15 @@ def _interactive_review(installs: list[PythonInstall], console, dry_run: bool) -
             choices.append("[U]pgrade venv")
             valid_keys.append("u")
         if inst.is_os_managed:
-            choices.append("[A]dvise CLT update")
+            choices.append("[A]dvise pkg-mgr update")
             valid_keys.append("a")
         elif not inst.is_current:
             choices.append("[D]elete")
             valid_keys.append("d")
-        if inst.install_type in ("brew",):
+        if inst.has_newer_patch and not inst.is_venv:
+            choices.append("[P]atch update advice")
+            valid_keys.append("p")
+        elif inst.install_type == "brew":
             choices.append("[S]uggest brew upgrade")
             if "s" not in valid_keys:
                 valid_keys.append("s")
@@ -139,6 +143,8 @@ def _interactive_review(installs: list[PythonInstall], console, dry_run: bool) -
             advise_clt_update(inst, console)
         elif answer == "d":
             delete_python(inst, console, dry_run=dry_run)
+        elif answer == "p":
+            suggest_patch_update(inst, console)
         elif answer == "s":
             if inst.install_type == "pyenv":
                 suggest_pyenv_upgrade(inst, console)
@@ -211,6 +217,9 @@ def main(
 
     if cycles is None:
         print_offline_warning(console)
+    else:
+        for inst in installs:
+            inst.latest_patch = latest_patch_for(inst.major_minor, cycles)
 
     if not installs:
         console.print("[bright_red]No Python installations found.[/bright_red]")
@@ -224,7 +233,8 @@ def main(
     # -- Auto upgrade venvs --
     if upgrade_venvs:
         venvs_to_upgrade = [
-            i for i in installs if i.is_venv and i.status in ("eol", "security")
+            i for i in installs
+            if i.is_venv and (i.status in ("eol", "security") or i.has_newer_patch)
         ]
         if venvs_to_upgrade:
             print_action_header(f"AUTO-UPGRADING {len(venvs_to_upgrade)} VENV(S)", console)

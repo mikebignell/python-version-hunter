@@ -203,6 +203,36 @@ def delete_python(
         return False
 
 
+def suggest_patch_update(install: PythonInstall, console: Console) -> None:
+    """Show how to update to the latest patch release for this install type."""
+    latest = install.latest_patch or "latest"
+    console.print(
+        f"\n[bright_cyan]Patch update available:[/bright_cyan] "
+        f"{install.version_str} → [bright_yellow]{latest}[/bright_yellow]"
+    )
+    t = install.install_type
+    if t == "brew":
+        suggest_brew_upgrade(install, console)
+    elif t == "pyenv":
+        suggest_pyenv_upgrade(install, console)
+    elif t in ("python.org", "system"):
+        advise_os_managed_python(install, console)
+    elif t == "conda":
+        console.print(
+            f"  [bright_green]conda update -n base python[/bright_green]  "
+            "[dim]# base env[/dim]"
+        )
+        console.print(
+            f"  [bright_green]conda update -n <env-name> python[/bright_green]  "
+            "[dim]# named env[/dim]"
+        )
+    else:
+        console.print(
+            f"  Download [bright_green]python.org/downloads[/bright_green] "
+            f"or use your package manager to install {latest}."
+        )
+
+
 def suggest_pyenv_upgrade(install: PythonInstall, console: Console) -> None:
     console.print(
         f"\n[bright_cyan]Pyenv upgrade suggestion for Python {install.version_str}:[/bright_cyan]"

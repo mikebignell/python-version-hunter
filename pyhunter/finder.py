@@ -47,6 +47,7 @@ class PythonInstall:
     install_type: str  # system | brew | pyenv | conda | venv | unknown
     venv_base: Optional[Path] = None
     is_current: bool = False
+    latest_patch: Optional[str] = None  # populated after fetching cycle data
 
     @property
     def major_minor(self) -> tuple[int, int]:
@@ -106,11 +107,28 @@ class PythonInstall:
         return False
 
     @property
+    def has_newer_patch(self) -> bool:
+        """True when latest_patch is set and is ahead of the installed version."""
+        if not self.latest_patch:
+            return False
+        try:
+            return (
+                tuple(int(x) for x in self.latest_patch.split(".")) > self.version
+            )
+        except ValueError:
+            return False
+
+    @property
     def recommendation(self) -> str:
         if self.is_os_managed:
-            return "UPDATE VIA PKG MGR" if self.status in ("eol", "security") else "KEEP"
+            if self.status in ("eol", "security") or self.has_newer_patch:
+                return "UPDATE VIA PKG MGR"
+            return "KEEP"
         if self.status == "eol":
             return "UPGRADE VENV" if self.is_venv else "DELETE"
+        # For security-only and supported: check for a newer patch first.
+        if self.has_newer_patch:
+            return "UPGRADE VENV" if self.is_venv else "UPDATE PATCH"
         if self.status == "security":
             return "UPGRADE VENV" if self.is_venv else "CONSIDER UPGRADE"
         return "KEEP"
@@ -120,6 +138,7 @@ class PythonInstall:
         return {
             "UPDATE VIA PKG MGR": "bright_cyan",
             "UPGRADE VENV":       "bright_yellow",
+            "UPDATE PATCH":       "bright_yellow",
             "DELETE":             "bright_red",
             "CONSIDER UPGRADE":   "yellow",
             "KEEP":               "bright_green",
