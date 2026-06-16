@@ -37,6 +37,10 @@ class PythonInstall:
         return self.venv_base is not None
 
     @property
+    def is_python2(self) -> bool:
+        return self.version[0] == 2
+
+    @property
     def status(self) -> str:
         mm = self.major_minor
         if mm in EOL_VERSIONS:
@@ -47,6 +51,8 @@ class PythonInstall:
 
     @property
     def status_label(self) -> str:
+        if self.is_python2:
+            return "☠ DEAD"
         return {"eol": "■ EOL", "security": "◆ SECURITY", "supported": "● OK"}[self.status]
 
     @property

@@ -25,12 +25,14 @@ from pyhunter.actions import (
     upgrade_venv,
 )
 from pyhunter.finder import find_all_pythons, PythonInstall
+from pyhunter.versions import CycleInfo, fetch_release_info
 from pyhunter.ui import (
     make_console,
     make_results_table,
     print_action_header,
     print_banner,
     print_no_issues,
+    print_offline_warning,
     print_summary,
 )
 
@@ -52,12 +54,7 @@ def _scan_with_progress(
     extra_paths: list[Path],
     venv_paths: list[Path],
     console,
-) -> list[PythonInstall]:
-    messages: list[str] = []
-
-    def _cb(msg: str) -> None:
-        messages.append(msg)
-
+) -> tuple[list[PythonInstall], Optional[list[CycleInfo]]]:
     with Progress(
         SpinnerColumn(spinner_name="dots", style="bright_magenta"),
         TextColumn("[bright_green]{task.description}[/bright_green]"),
@@ -66,23 +63,25 @@ def _scan_with_progress(
         console=console,
         transient=True,
     ) as progress:
-        task = progress.add_task("Initialising scan…", total=None)
+        task = progress.add_task("Fetching latest version data…", total=None)
+        cycles = fetch_release_info()
 
         def _cb_live(msg: str) -> None:
             progress.update(task, description=msg[:60])
 
+        _cb_live("Scanning system for Python installations…")
         installs = find_all_pythons(
             extra_paths=extra_paths or None,
             venv_search_paths=venv_paths or None,
             progress_callback=_cb_live,
         )
 
-    return installs
+    return installs, cycles
 
 
 def _interactive_review(installs: list[PythonInstall], console, dry_run: bool) -> None:
     """Walk the user through each non-OK installation one at a time."""
-    issues = [i for i in installs if i.status != "supported"]
+    issues = [i for i in installs if i.status != "supported" or i.is_python2]
     if not issues:
         print_no_issues(console)
         return
@@ -204,19 +203,22 @@ def main(
     if dry_run:
         console.print("[bright_yellow]  ⚠  DRY RUN MODE — no changes will be made.[/bright_yellow]\n")
 
-    installs = _scan_with_progress(
+    installs, cycles = _scan_with_progress(
         extra_paths=list(scan_paths or []),
         venv_paths=venv_paths,
         console=console,
     )
 
+    if cycles is None:
+        print_offline_warning(console)
+
     if not installs:
         console.print("[bright_red]No Python installations found.[/bright_red]")
         raise typer.Exit(1)
 
-    console.print(make_results_table(installs))
+    console.print(make_results_table(installs, cycles=cycles))
     console.print()
-    print_summary(installs, console)
+    print_summary(installs, console, cycles=cycles)
     console.print()
 
     # -- Auto upgrade venvs --
