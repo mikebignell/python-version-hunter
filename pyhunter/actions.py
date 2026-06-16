@@ -43,8 +43,8 @@ def _is_framework_python(python_path: Path) -> bool:
 def ensure_ssl_certs(python_path: Path, console: Console) -> None:
     """
     Python.org macOS installers ship without CA certificates wired up.
-    Run the bundled Install Certificates.command if present, otherwise
-    install certifi and patch the ssl module.
+    Attempt the bundled Install Certificates.command; if that needs root,
+    fall back to --user install of certifi. If SSL already works, skip.
     """
     if not _is_framework_python(python_path):
         return
@@ -58,27 +58,37 @@ def ensure_ssl_certs(python_path: Path, console: Console) -> None:
         return  # certs already work
 
     console.print(
-        "[bright_yellow]  ⚠  python.org Framework Python detected — SSL certificates not configured.[/bright_yellow]"
+        "  [bright_yellow]⚠  python.org Framework Python — SSL certificates not configured, fixing…[/bright_yellow]"
     )
 
-    # Try the bundled installer first
+    # Try the bundled installer (captured, not streamed — it can error noisily)
     ver_match = re.search(r"Python\.framework/Versions/(\d+\.\d+)", str(python_path))
     if ver_match:
         cert_cmd = Path(f"/Applications/Python {ver_match.group(1)}/Install Certificates.command")
         if cert_cmd.exists():
-            console.print(f"  [bright_cyan]Running cert installer: {cert_cmd}[/bright_cyan]")
-            _run_visible(["bash", str(cert_cmd)], console)
-            return
+            rc, _, stderr = _run_capturing(["bash", str(cert_cmd)])
+            if rc == 0:
+                console.print("  [bright_green]✓ SSL certificates installed.[/bright_green]")
+                return
+            if "Permission denied" in stderr or "EACCES" in stderr or rc == 1:
+                # Script needs root to write to system site-packages — use --user instead
+                console.print(
+                    "  [dim]Install Certificates.command needs root; "
+                    "installing certifi to user site-packages instead…[/dim]"
+                )
 
-    # Fallback: install certifi and patch ssl
-    console.print("  [bright_cyan]Installing certifi as SSL cert fallback…[/bright_cyan]")
-    _run_visible([str(python_path), "-m", "pip", "install", "--quiet", "--upgrade", "certifi"], console)
-    # Apply the certifi cert path at runtime via REQUESTS_CA_BUNDLE and SSL_CERT_FILE
-    console.print(
-        "  [bright_yellow]Note: add to your shell: "
-        "export SSL_CERT_FILE=$(python3 -c 'import certifi; print(certifi.where())')"
-        "[/bright_yellow]"
-    )
+    # --user install avoids needing sudo for the Framework Python
+    rc2, _, _ = _run_capturing([
+        str(python_path), "-m", "pip", "install", "--quiet", "--user", "--upgrade", "certifi"
+    ])
+    if rc2 == 0:
+        console.print("  [bright_green]✓ certifi installed (--user).[/bright_green]")
+    else:
+        console.print(
+            "  [bright_yellow]Could not install certifi automatically. "
+            "If SSL errors occur, run:[/bright_yellow]\n"
+            f"  [bright_green]sudo {python_path} -m pip install --upgrade certifi[/bright_green]"
+        )
 
 
 # ── Package reinstall with fallback ──────────────────────────────────────────
