@@ -168,9 +168,28 @@
       word-break: break-all;
     }
 
-    .prompt { color: var(--magenta); }
+    .prompt { color: var(--magenta); user-select: none; }
     .cmd    { color: var(--green); }
     .out    { color: var(--dim); }
+
+    /* ── Copy button ── */
+    .copy-btn {
+      position: absolute;
+      top: 0.5rem;
+      right: 0.6rem;
+      background: transparent;
+      border: 1px solid var(--dim);
+      color: var(--dim);
+      font-family: 'Share Tech Mono', monospace;
+      font-size: 0.72rem;
+      padding: 0.15rem 0.5rem;
+      cursor: pointer;
+      letter-spacing: 0.05em;
+      transition: border-color 0.15s, color 0.15s;
+      z-index: 1;
+    }
+    .copy-btn:hover { border-color: var(--cyan); color: var(--cyan); }
+    .copy-btn.copied { border-color: var(--green); color: var(--green); }
     .out-ok     { color: var(--green); }
     .out-warn   { color: var(--yellow); }
     .out-err    { color: var(--red); }
@@ -374,6 +393,7 @@
     <h2 class="section-title">// INSTALL</h2>
     <p>Paste this into your terminal. Requires Python 3.11+ — the script will tell you if you don't have one.</p>
     <div class="terminal" style="margin: 1rem 0;">
+      <button class="copy-btn" data-copy="curl -fsSL https://raw.githubusercontent.com/mikebignell/python-version-hunter/main/install.sh | bash">COPY</button>
       <div class="terminal-content">
         <pre><code><span class="prompt">$</span> <span class="cmd">curl -fsSL https://raw.githubusercontent.com/mikebignell/python-version-hunter/main/install.sh | bash</span></code></pre>
       </div>
@@ -551,5 +571,16 @@
   </footer>
 
 </div>
+<script>
+  document.querySelectorAll('.copy-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      navigator.clipboard.writeText(btn.dataset.copy).then(() => {
+        btn.textContent = 'COPIED!';
+        btn.classList.add('copied');
+        setTimeout(() => { btn.textContent = 'COPY'; btn.classList.remove('copied'); }, 2000);
+      });
+    });
+  });
+</script>
 </body>
 </html>
