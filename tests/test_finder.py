@@ -258,6 +258,31 @@ class TestHasNewerPatch:
         assert not inst.has_newer_patch
 
 
+class TestHasNewerCycle:
+    def test_no_latest_stable(self):
+        assert not _make_install(3, 13).has_newer_cycle
+
+    def test_on_latest_cycle(self):
+        inst = _make_install(3, 14)
+        inst.latest_stable = "3.14.6"
+        assert not inst.has_newer_cycle
+
+    def test_behind_one_minor(self):
+        inst = _make_install(3, 13)
+        inst.latest_stable = "3.14.6"
+        assert inst.has_newer_cycle
+
+    def test_behind_multiple_minors(self):
+        inst = _make_install(3, 11)
+        inst.latest_stable = "3.14.6"
+        assert inst.has_newer_cycle
+
+    def test_python2_behind(self):
+        inst = _make_install(2, 7)
+        inst.latest_stable = "3.14.6"
+        assert inst.has_newer_cycle
+
+
 class TestRecommendationWithPatch:
     def test_supported_with_newer_patch_recommends_update(self):
         inst = _make_install(3, 12, 3)
@@ -289,6 +314,29 @@ class TestRecommendationWithPatch:
         inst.path = Path("/usr/bin/python3")
         inst.latest_patch = "3.9.25"
         assert inst.recommendation == "UPDATE VIA PKG MGR"
+
+    def test_supported_with_newer_cycle_recommends_upgrade_available(self):
+        inst = _make_install(3, 13, 14)
+        inst.latest_stable = "3.14.6"
+        assert inst.recommendation == "UPGRADE AVAILABLE"
+
+    def test_newer_cycle_takes_priority_over_patch(self):
+        # On 3.13.13, latest patch is 3.13.14, but 3.14 is available
+        inst = _make_install(3, 13, 13)
+        inst.latest_patch = "3.13.14"
+        inst.latest_stable = "3.14.6"
+        assert inst.recommendation == "UPGRADE AVAILABLE"
+
+    def test_supported_venv_with_newer_cycle_recommends_upgrade_venv(self):
+        inst = _make_install(3, 13, 14, venv_base=Path("/some/venv"))
+        inst.latest_stable = "3.14.6"
+        assert inst.recommendation == "UPGRADE VENV"
+
+    def test_on_latest_cycle_and_patch_recommends_keep(self):
+        inst = _make_install(3, 14, 6)
+        inst.latest_patch = "3.14.6"
+        inst.latest_stable = "3.14.6"
+        assert inst.recommendation == "KEEP"
 
 
 class TestVersionSets:

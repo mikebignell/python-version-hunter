@@ -203,6 +203,43 @@ def delete_python(
         return False
 
 
+def suggest_cycle_upgrade(install: PythonInstall, console: Console) -> None:
+    """Show how to install a newer Python cycle alongside the existing one."""
+    latest = install.latest_stable or "latest"
+    console.print(
+        f"\n[bright_cyan]Newer Python available:[/bright_cyan] "
+        f"{install.version_str} → [bright_yellow]{latest}[/bright_yellow]"
+    )
+    console.print(
+        "  Installing a new Python version [bold]does not remove[/bold] the old one —\n"
+        "  both coexist. Update your venvs and shell default afterwards.\n"
+    )
+    t = install.install_type
+    if t == "brew":
+        console.print("  [bright_cyan]Homebrew:[/bright_cyan]")
+        console.print(f"  [bright_green]brew install python[/bright_green]  [dim]# installs latest[/dim]")
+        console.print(f"  [bright_green]brew unlink python@{install.major_minor[1]} && brew link python[/bright_green]  [dim]# switch default[/dim]")
+    elif t == "pyenv":
+        console.print("  [bright_cyan]pyenv:[/bright_cyan]")
+        console.print(f"  [bright_green]pyenv install {latest}[/bright_green]")
+        console.print(f"  [bright_green]pyenv global {latest}[/bright_green]")
+    elif t == "conda":
+        console.print("  [bright_cyan]conda:[/bright_cyan]")
+        console.print(f"  [bright_green]conda install python={latest}[/bright_green]")
+    elif t in ("python.org", "system"):
+        advise_os_managed_python(install, console)
+    else:
+        console.print(
+            f"  Download [bright_green]python.org/downloads[/bright_green] "
+            f"or use your package manager to install Python {latest}."
+        )
+    console.print(
+        "\n  [dim]After installing, run [bright_green]pyhunter --upgrade-venvs "
+        f"--target-python $(which python{latest[:4]})[/bright_green] "
+        "to update your venvs.[/dim]"
+    )
+
+
 def suggest_patch_update(install: PythonInstall, console: Console) -> None:
     """Show how to update to the latest patch release for this install type."""
     latest = install.latest_patch or "latest"

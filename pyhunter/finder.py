@@ -47,7 +47,8 @@ class PythonInstall:
     install_type: str  # system | brew | pyenv | conda | venv | unknown
     venv_base: Optional[Path] = None
     is_current: bool = False
-    latest_patch: Optional[str] = None  # populated after fetching cycle data
+    latest_patch: Optional[str] = None   # latest patch for this major.minor cycle
+    latest_stable: Optional[str] = None  # latest stable Python overall (e.g. 3.14.6)
 
     @property
     def major_minor(self) -> tuple[int, int]:
@@ -108,25 +109,37 @@ class PythonInstall:
 
     @property
     def has_newer_patch(self) -> bool:
-        """True when latest_patch is set and is ahead of the installed version."""
+        """True when a newer patch exists within the same major.minor cycle."""
         if not self.latest_patch:
             return False
         try:
-            return (
-                tuple(int(x) for x in self.latest_patch.split(".")) > self.version
-            )
+            return tuple(int(x) for x in self.latest_patch.split(".")) > self.version
+        except ValueError:
+            return False
+
+    @property
+    def has_newer_cycle(self) -> bool:
+        """True when the overall latest Python is a higher minor/major than installed."""
+        if not self.latest_stable:
+            return False
+        try:
+            latest_mm = tuple(int(x) for x in self.latest_stable.split(".")[:2])
+            return latest_mm > self.major_minor
         except ValueError:
             return False
 
     @property
     def recommendation(self) -> str:
         if self.is_os_managed:
-            if self.status in ("eol", "security") or self.has_newer_patch:
+            if self.status in ("eol", "security") or self.has_newer_patch or self.has_newer_cycle:
                 return "UPDATE VIA PKG MGR"
             return "KEEP"
         if self.status == "eol":
             return "UPGRADE VENV" if self.is_venv else "DELETE"
-        # For security-only and supported: check for a newer patch first.
+        # A newer Python cycle exists (e.g. on 3.13, latest is 3.14)
+        if self.has_newer_cycle:
+            return "UPGRADE VENV" if self.is_venv else "UPGRADE AVAILABLE"
+        # Same cycle but behind on patch (e.g. 3.14.5 when 3.14.6 is out)
         if self.has_newer_patch:
             return "UPGRADE VENV" if self.is_venv else "UPDATE PATCH"
         if self.status == "security":
@@ -138,7 +151,8 @@ class PythonInstall:
         return {
             "UPDATE VIA PKG MGR": "bright_cyan",
             "UPGRADE VENV":       "bright_yellow",
-            "UPDATE PATCH":       "bright_yellow",
+            "UPGRADE AVAILABLE":  "bright_yellow",
+            "UPDATE PATCH":       "yellow",
             "DELETE":             "bright_red",
             "CONSIDER UPGRADE":   "yellow",
             "KEEP":               "bright_green",

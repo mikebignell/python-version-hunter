@@ -21,12 +21,13 @@ from pyhunter.actions import (
     advise_clt_update,
     delete_python,
     suggest_brew_upgrade,
+    suggest_cycle_upgrade,
     suggest_patch_update,
     suggest_pyenv_upgrade,
     upgrade_venv,
 )
 from pyhunter.finder import find_all_pythons, PythonInstall
-from pyhunter.versions import CycleInfo, fetch_release_info, latest_patch_for
+from pyhunter.versions import CycleInfo, fetch_release_info, latest_patch_for, latest_stable_version
 from pyhunter.ui import (
     make_console,
     make_results_table,
@@ -43,6 +44,18 @@ app = typer.Typer(
     add_completion=False,
     rich_markup_mode="rich",
 )
+
+
+def _best_python(installs: list[PythonInstall]) -> Optional[Path]:
+    """Return the path to the highest supported, non-venv Python found."""
+    candidates = [
+        i for i in installs
+        if not i.is_venv and not i.is_current and i.status == "supported"
+    ]
+    if not candidates:
+        return None
+    best = max(candidates, key=lambda i: i.version)
+    return best.path
 
 
 def _version_callback(value: bool) -> None:
@@ -115,10 +128,14 @@ def _interactive_review(installs: list[PythonInstall], console, dry_run: bool) -
         elif not inst.is_current:
             choices.append("[D]elete")
             valid_keys.append("d")
-        if inst.has_newer_patch and not inst.is_venv:
+        if inst.has_newer_cycle and not inst.is_venv:
+            choices.append("[U]pgrade to latest Python")
+            if "u" not in valid_keys:
+                valid_keys.append("u")
+        if inst.has_newer_patch and not inst.is_venv and not inst.has_newer_cycle:
             choices.append("[P]atch update advice")
             valid_keys.append("p")
-        elif inst.install_type == "brew":
+        elif not inst.has_newer_cycle and inst.install_type == "brew":
             choices.append("[S]uggest brew upgrade")
             if "s" not in valid_keys:
                 valid_keys.append("s")
@@ -138,7 +155,9 @@ def _interactive_review(installs: list[PythonInstall], console, dry_run: bool) -
         ).lower()
 
         if answer == "u" and inst.is_venv:
-            upgrade_venv(inst, None, console, dry_run=dry_run)
+            upgrade_venv(inst, _best_python(installs), console, dry_run=dry_run)
+        elif answer == "u" and inst.has_newer_cycle:
+            suggest_cycle_upgrade(inst, console)
         elif answer == "a":
             advise_clt_update(inst, console)
         elif answer == "d":
@@ -218,8 +237,10 @@ def main(
     if cycles is None:
         print_offline_warning(console)
     else:
+        latest = latest_stable_version(cycles)
         for inst in installs:
             inst.latest_patch = latest_patch_for(inst.major_minor, cycles)
+            inst.latest_stable = latest
 
     if not installs:
         console.print("[bright_red]No Python installations found.[/bright_red]")
@@ -234,12 +255,20 @@ def main(
     if upgrade_venvs:
         venvs_to_upgrade = [
             i for i in installs
-            if i.is_venv and (i.status in ("eol", "security") or i.has_newer_patch)
+            if i.is_venv and (
+                i.status in ("eol", "security") or i.has_newer_patch or i.has_newer_cycle
+            )
         ]
+        # Auto-select the best available Python if no explicit target given.
+        effective_target = target_python or _best_python(installs)
+        if effective_target and effective_target != Path(sys.executable):
+            console.print(
+                f"[bright_cyan]  Target Python:[/bright_cyan] {effective_target}\n"
+            )
         if venvs_to_upgrade:
             print_action_header(f"AUTO-UPGRADING {len(venvs_to_upgrade)} VENV(S)", console)
             for inst in venvs_to_upgrade:
-                upgrade_venv(inst, target_python, console, dry_run=dry_run)
+                upgrade_venv(inst, effective_target, console, dry_run=dry_run)
         else:
             console.print("[bright_green]No venvs require upgrading.[/bright_green]")
         console.print()
