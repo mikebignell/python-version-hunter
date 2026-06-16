@@ -1,0 +1,487 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PY HUNTER — Python Version Scanner</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=VT323&display=swap');
+
+    :root {
+      --green: #00ff41;
+      --cyan: #00e5ff;
+      --magenta: #ff00ff;
+      --yellow: #ffff00;
+      --red: #ff3131;
+      --dim: #00802b;
+      --bg: #0a0a0a;
+      --panel-bg: #0d1a0d;
+      --border: #00802b;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: var(--bg);
+      color: var(--green);
+      font-family: 'Share Tech Mono', monospace;
+      min-height: 100vh;
+      overflow-x: hidden;
+    }
+
+    /* Scanline overlay */
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      background: repeating-linear-gradient(
+        0deg,
+        transparent,
+        transparent 2px,
+        rgba(0,0,0,0.07) 2px,
+        rgba(0,0,0,0.07) 4px
+      );
+      pointer-events: none;
+      z-index: 999;
+    }
+
+    /* CRT glow */
+    body::after {
+      content: '';
+      position: fixed;
+      inset: 0;
+      background: radial-gradient(ellipse at center, transparent 60%, rgba(0,0,0,0.6) 100%);
+      pointer-events: none;
+      z-index: 998;
+    }
+
+    .container {
+      max-width: 900px;
+      margin: 0 auto;
+      padding: 2rem 1.5rem;
+    }
+
+    /* ── Header ── */
+    .header {
+      text-align: center;
+      padding: 3rem 0 2rem;
+      border-bottom: 2px solid var(--cyan);
+      margin-bottom: 3rem;
+    }
+
+    .ascii-art {
+      font-family: 'VT323', monospace;
+      font-size: clamp(0.45rem, 1.8vw, 0.8rem);
+      color: var(--green);
+      text-shadow: 0 0 8px var(--green);
+      white-space: pre;
+      line-height: 1.15;
+      margin-bottom: 1.5rem;
+      display: inline-block;
+    }
+
+    .tagline {
+      font-family: 'VT323', monospace;
+      font-size: 1.4rem;
+      color: var(--cyan);
+      text-shadow: 0 0 10px var(--cyan);
+      letter-spacing: 0.15em;
+      margin-bottom: 1rem;
+    }
+
+    .version-badge {
+      display: inline-block;
+      border: 1px solid var(--magenta);
+      color: var(--magenta);
+      padding: 0.1rem 0.6rem;
+      font-size: 0.8rem;
+      text-shadow: 0 0 6px var(--magenta);
+    }
+
+    /* ── Badges ── */
+    .badges {
+      display: flex;
+      gap: 0.75rem;
+      justify-content: center;
+      flex-wrap: wrap;
+      margin: 1.5rem 0;
+    }
+
+    .badges a img { height: 20px; }
+
+    /* ── Sections ── */
+    .section {
+      margin-bottom: 3rem;
+    }
+
+    .section-title {
+      font-family: 'VT323', monospace;
+      font-size: 1.8rem;
+      color: var(--cyan);
+      text-shadow: 0 0 8px var(--cyan);
+      border-left: 4px solid var(--cyan);
+      padding-left: 0.75rem;
+      margin-bottom: 1.25rem;
+      letter-spacing: 0.1em;
+    }
+
+    p, li {
+      line-height: 1.7;
+      color: #c8ffc8;
+      font-size: 0.95rem;
+    }
+
+    ul { list-style: none; padding-left: 0; }
+    ul li::before { content: '▸ '; color: var(--cyan); }
+    ul li { margin-bottom: 0.4rem; }
+
+    /* ── Terminal box ── */
+    .terminal {
+      background: var(--panel-bg);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 1.25rem 1.5rem;
+      margin: 1rem 0;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .terminal::before {
+      content: '● ● ●';
+      color: var(--dim);
+      font-size: 0.7rem;
+      position: absolute;
+      top: 6px;
+      left: 10px;
+    }
+
+    .terminal-content {
+      margin-top: 1rem;
+    }
+
+    .terminal code, .terminal pre {
+      font-family: 'Share Tech Mono', monospace;
+      font-size: 0.88rem;
+      color: var(--green);
+      text-shadow: 0 0 4px rgba(0,255,65,0.3);
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+
+    .prompt { color: var(--magenta); }
+    .cmd    { color: var(--green); }
+    .out    { color: var(--dim); }
+    .out-ok     { color: var(--green); }
+    .out-warn   { color: var(--yellow); }
+    .out-err    { color: var(--red); }
+
+    /* ── Status table ── */
+    .status-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.9rem;
+      margin: 1rem 0;
+    }
+
+    .status-table th {
+      background: #001a00;
+      color: var(--cyan);
+      text-shadow: 0 0 6px var(--cyan);
+      padding: 0.6rem 1rem;
+      text-align: left;
+      border: 1px solid var(--border);
+      font-family: 'VT323', monospace;
+      font-size: 1.1rem;
+      letter-spacing: 0.1em;
+    }
+
+    .status-table td {
+      padding: 0.5rem 1rem;
+      border: 1px solid var(--border);
+      color: #c8ffc8;
+    }
+
+    .status-table tr:hover td { background: #001a00; }
+
+    .badge-eol      { color: var(--red);     text-shadow: 0 0 5px var(--red); }
+    .badge-security { color: var(--yellow);  text-shadow: 0 0 5px var(--yellow); }
+    .badge-ok       { color: var(--green);   text-shadow: 0 0 5px var(--green); }
+
+    /* ── Feature grid ── */
+    .feature-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+      gap: 1rem;
+      margin: 1rem 0;
+    }
+
+    .feature-card {
+      background: var(--panel-bg);
+      border: 1px solid var(--border);
+      padding: 1.25rem;
+      transition: border-color 0.2s, box-shadow 0.2s;
+    }
+
+    .feature-card:hover {
+      border-color: var(--cyan);
+      box-shadow: 0 0 12px rgba(0, 229, 255, 0.2);
+    }
+
+    .feature-icon {
+      font-size: 1.8rem;
+      display: block;
+      margin-bottom: 0.5rem;
+    }
+
+    .feature-name {
+      font-family: 'VT323', monospace;
+      font-size: 1.2rem;
+      color: var(--cyan);
+      text-shadow: 0 0 6px var(--cyan);
+      display: block;
+      margin-bottom: 0.4rem;
+      letter-spacing: 0.08em;
+    }
+
+    .feature-desc {
+      font-size: 0.85rem;
+      color: #9fcf9f;
+    }
+
+    /* ── CTA ── */
+    .cta {
+      text-align: center;
+      padding: 2.5rem;
+      border: 2px solid var(--cyan);
+      background: var(--panel-bg);
+      margin: 2rem 0;
+    }
+
+    .cta-title {
+      font-family: 'VT323', monospace;
+      font-size: 2rem;
+      color: var(--magenta);
+      text-shadow: 0 0 12px var(--magenta);
+      margin-bottom: 1rem;
+      letter-spacing: 0.1em;
+    }
+
+    .btn {
+      display: inline-block;
+      border: 2px solid var(--green);
+      color: var(--green);
+      text-decoration: none;
+      padding: 0.6rem 1.8rem;
+      font-family: 'Share Tech Mono', monospace;
+      font-size: 1rem;
+      text-shadow: 0 0 6px var(--green);
+      box-shadow: 0 0 10px rgba(0,255,65,0.2);
+      margin: 0.4rem;
+      transition: all 0.2s;
+    }
+
+    .btn:hover {
+      background: var(--green);
+      color: var(--bg);
+      box-shadow: 0 0 20px rgba(0,255,65,0.5);
+      text-shadow: none;
+    }
+
+    .btn-secondary {
+      border-color: var(--cyan);
+      color: var(--cyan);
+      text-shadow: 0 0 6px var(--cyan);
+      box-shadow: 0 0 10px rgba(0,229,255,0.2);
+    }
+
+    .btn-secondary:hover {
+      background: var(--cyan);
+      color: var(--bg);
+      box-shadow: 0 0 20px rgba(0,229,255,0.5);
+    }
+
+    /* ── Footer ── */
+    footer {
+      text-align: center;
+      border-top: 1px solid var(--border);
+      padding: 2rem 0;
+      color: var(--dim);
+      font-size: 0.8rem;
+    }
+
+    footer a { color: var(--cyan); text-decoration: none; }
+    footer a:hover { text-shadow: 0 0 6px var(--cyan); }
+
+    /* Blinking cursor */
+    @keyframes blink {
+      0%, 100% { opacity: 1; }
+      50%       { opacity: 0; }
+    }
+    .cursor::after {
+      content: '█';
+      animation: blink 1s step-start infinite;
+      color: var(--green);
+    }
+
+    /* Glitch animation for title */
+    @keyframes glitch {
+      0%   { text-shadow: 0 0 8px var(--green); transform: none; }
+      2%   { text-shadow: -2px 0 var(--red), 2px 0 var(--cyan); transform: skewX(-2deg); }
+      4%   { text-shadow: 0 0 8px var(--green); transform: none; }
+      96%  { text-shadow: 0 0 8px var(--green); transform: none; }
+      98%  { text-shadow: 2px 0 var(--magenta), -2px 0 var(--cyan); transform: skewX(1deg); }
+      100% { text-shadow: 0 0 8px var(--green); transform: none; }
+    }
+
+    .ascii-art { animation: glitch 6s infinite; }
+  </style>
+</head>
+<body>
+
+<div class="container">
+
+  <!-- ── Header ── -->
+  <header class="header">
+    <pre class="ascii-art">
+  ██████╗ ██╗   ██╗    ██╗  ██╗██╗   ██╗███╗  ██╗████████╗███████╗██████╗
+  ██╔══██╗╚██╗ ██╔╝    ██║  ██║██║   ██║████╗ ██║╚══██╔══╝██╔════╝██╔══██╗
+  ██████╔╝ ╚████╔╝     ███████║██║   ██║██╔██╗██║   ██║   █████╗  ██████╔╝
+  ██╔═══╝   ╚██╔╝      ██╔══██║██║   ██║██║╚████║   ██║   ██╔══╝  ██╔══██╗
+  ██║        ██║       ██║  ██║╚██████╔╝██║ ╚███║   ██║   ███████╗██║  ██║
+  ╚═╝        ╚═╝       ╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚══╝   ╚═╝   ╚══════╝╚═╝  ╚═╝</pre>
+
+    <div class="tagline">F I N D  ·  A U D I T  ·  U P G R A D E  ·  C L E A N U P</div>
+    <span class="version-badge">v1.0.0</span>
+
+    <div class="badges">
+      <a href="https://github.com/mikebignell/python-version-hunter/actions/workflows/ci.yml">
+        <img src="https://github.com/mikebignell/python-version-hunter/actions/workflows/ci.yml/badge.svg" alt="CI">
+      </a>
+      <a href="https://www.python.org">
+        <img src="https://img.shields.io/badge/python-3.11%2B-brightgreen" alt="Python 3.11+">
+      </a>
+      <a href="https://github.com/mikebignell/python-version-hunter/blob/main/LICENSE">
+        <img src="https://img.shields.io/badge/License-MIT-cyan.svg" alt="MIT">
+      </a>
+    </div>
+  </header>
+
+  <!-- ── What it does ── -->
+  <section class="section">
+    <h2 class="section-title">// WHAT IT DOES</h2>
+    <p>
+      PY HUNTER scans every corner of your machine — PATH, Homebrew, pyenv, conda, python.org framework installs,
+      and every virtual environment in your home directory — then tells you which versions are compliant and which ones need to go.
+    </p>
+  </section>
+
+  <!-- ── Features ── -->
+  <section class="section">
+    <h2 class="section-title">// FEATURES</h2>
+    <div class="feature-grid">
+      <div class="feature-card">
+        <span class="feature-icon">🔍</span>
+        <span class="feature-name">FULL SYSTEM SCAN</span>
+        <span class="feature-desc">Finds Pythons in PATH, Homebrew, pyenv, conda/mamba, python.org framework installs, and nested virtual environments.</span>
+      </div>
+      <div class="feature-card">
+        <span class="feature-icon">📊</span>
+        <span class="feature-name">COMPLIANCE AUDIT</span>
+        <span class="feature-desc">Colour-coded status table. EOL in red, security-only in yellow, fully supported in green.</span>
+      </div>
+      <div class="feature-card">
+        <span class="feature-icon">⚡</span>
+        <span class="feature-name">AUTO VENV UPGRADE</span>
+        <span class="feature-desc">Recreates virtual environments with a newer Python, preserving all installed packages automatically.</span>
+      </div>
+      <div class="feature-card">
+        <span class="feature-icon">🕹️</span>
+        <span class="feature-name">INTERACTIVE MODE</span>
+        <span class="feature-desc">Step through each problem installation and decide: upgrade, delete, suggest, or skip.</span>
+      </div>
+      <div class="feature-card">
+        <span class="feature-icon">🌈</span>
+        <span class="feature-name">RETRO UI</span>
+        <span class="feature-desc">Classic 80s BBS terminal aesthetic. Neon green, scan lines, animated progress bars.</span>
+      </div>
+      <div class="feature-card">
+        <span class="feature-icon">🛡️</span>
+        <span class="feature-name">DRY RUN MODE</span>
+        <span class="feature-desc">Preview every action before it happens. No surprises.</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Quick start ── -->
+  <section class="section">
+    <h2 class="section-title">// QUICK START</h2>
+    <div class="terminal">
+      <div class="terminal-content">
+        <pre><code><span class="prompt">$</span> <span class="cmd">pip install git+https://github.com/mikebignell/python-version-hunter.git</span>
+
+<span class="prompt">$</span> <span class="cmd">pyhunter</span>                          <span class="out"># scan and report</span>
+
+<span class="prompt">$</span> <span class="cmd">pyhunter --interactive</span>           <span class="out"># decide for each issue</span>
+
+<span class="prompt">$</span> <span class="cmd">pyhunter --upgrade-venvs</span>         <span class="out"># auto-upgrade all EOL venvs</span>
+
+<span class="prompt">$</span> <span class="cmd">pyhunter --upgrade-venvs --dry-run</span>  <span class="out"># preview only</span></code></pre>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Status reference ── -->
+  <section class="section">
+    <h2 class="section-title">// VERSION STATUS (2026)</h2>
+    <table class="status-table">
+      <thead>
+        <tr>
+          <th>PYTHON</th>
+          <th>STATUS</th>
+          <th>EOL DATE</th>
+          <th>RECOMMENDATION</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td>≤ 3.9</td><td class="badge-eol">■ EOL</td><td>Oct 2025</td><td>Delete / upgrade venvs</td></tr>
+        <tr><td>3.10</td><td class="badge-security">◆ SECURITY</td><td>Oct 2026</td><td>Consider upgrading</td></tr>
+        <tr><td>3.11</td><td class="badge-ok">● OK</td><td>Oct 2027</td><td>Keep</td></tr>
+        <tr><td>3.12</td><td class="badge-ok">● OK</td><td>Oct 2028</td><td>Keep</td></tr>
+        <tr><td>3.13</td><td class="badge-ok">● OK</td><td>Oct 2029</td><td>Keep</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- ── How venv upgrade works ── -->
+  <section class="section">
+    <h2 class="section-title">// HOW VENV UPGRADE WORKS</h2>
+    <ul>
+      <li>Reads <code>pip freeze</code> output from the existing venv</li>
+      <li>Backs up requirements to <code>&lt;venv_name&gt;_requirements_backup.txt</code></li>
+      <li>Deletes the old venv directory</li>
+      <li>Creates a new venv with the target Python</li>
+      <li>Reinstalls all packages</li>
+    </ul>
+    <p style="margin-top:0.75rem; color: var(--yellow);">
+      ⚠ Package compatibility is not guaranteed across Python versions. Review the backup file if reinstall has issues.
+    </p>
+  </section>
+
+  <!-- ── CTA ── -->
+  <div class="cta">
+    <div class="cta-title">INITIALISE SCAN SEQUENCE<span class="cursor"></span></div>
+    <a href="https://github.com/mikebignell/python-version-hunter" class="btn">VIEW ON GITHUB</a>
+    <a href="https://github.com/mikebignell/python-version-hunter/issues" class="btn btn-secondary">REPORT A BUG</a>
+  </div>
+
+  <!-- ── Footer ── -->
+  <footer>
+    <p>Built with ❤️ and Rich ·
+       <a href="https://github.com/mikebignell/python-version-hunter">GitHub</a> ·
+       MIT License
+    </p>
+  </footer>
+
+</div>
+</body>
+</html>
