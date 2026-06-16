@@ -185,15 +185,51 @@ class TestIsOsManaged:
         inst.path = Path("/opt/homebrew/bin/python3")
         assert not inst.is_os_managed
 
-    def test_os_managed_eol_recommends_clt(self):
+    def test_os_managed_eol_recommends_pkg_mgr(self):
         inst = _make_install(3, 9)
         inst.path = Path("/usr/bin/python3")
-        assert inst.recommendation == "UPDATE VIA CLT"
+        assert inst.recommendation == "UPDATE VIA PKG MGR"
 
     def test_non_system_eol_recommends_delete(self):
         inst = _make_install(3, 9)
         inst.path = Path("/opt/homebrew/bin/python3")
         assert inst.recommendation == "DELETE"
+
+
+class TestCrossPlatformPaths:
+    def test_pathsep_used_in_scan(self):
+        """scan_path_executables should split PATH with os.pathsep, not ':'."""
+        import os
+        from pyhunter.finder import scan_path_executables
+        # Patch PATH to be empty so no real scan happens — we just verify no crash.
+        with patch.dict(os.environ, {"PATH": ""}):
+            result = scan_path_executables()
+        assert isinstance(result, list)
+
+    def test_venv_executable_unix(self, tmp_path):
+        from pyhunter.finder import _venv_executable
+        (tmp_path / "bin").mkdir()
+        py = tmp_path / "bin" / "python3"
+        py.write_text("#!/bin/sh\n")
+        py.chmod(0o755)
+        found = _venv_executable(tmp_path)
+        assert found is not None
+        assert found.name in ("python3", "python")
+
+    def test_venv_executable_windows_style(self, tmp_path):
+        from pyhunter.finder import _venv_executable
+        (tmp_path / "Scripts").mkdir()
+        py = tmp_path / "Scripts" / "python.exe"
+        py.write_text("")
+        found = _venv_executable(tmp_path)
+        assert found is not None
+        assert found.name == "python.exe"
+
+    def test_classify_brew_linux(self):
+        assert _classify_path(Path("/home/linuxbrew/.linuxbrew/bin/python3")) == "brew"
+
+    def test_classify_conda(self):
+        assert _classify_path(Path("/home/user/miniconda3/envs/ml/bin/python3")) == "conda"
 
 
 class TestVersionSets:

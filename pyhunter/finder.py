@@ -18,6 +18,19 @@ EOL_VERSIONS: set[tuple[int, int]] = {(2, x) for x in range(10)} | {
 }
 SECURITY_VERSIONS: set[tuple[int, int]] = {(3, 10)}
 
+# Cross-platform venv executable candidates, tried in order.
+_VENV_PY_CANDIDATES: list[tuple[str, ...]] = [
+    ("bin", "python3"),       # Unix/macOS default
+    ("bin", "python"),        # Unix fallback
+    ("Scripts", "python.exe"),  # Windows
+    ("Scripts", "python3.exe"), # Windows alternate
+]
+
+# Directories skipped during recursive venv scan.
+_SCAN_SKIP_DIRS = frozenset(
+    {"node_modules", "__pycache__", ".git", ".tox", "dist", "build", "site-packages"}
+)
+
 
 @dataclass
 class PythonInstall:
@@ -65,20 +78,30 @@ class PythonInstall:
 
     @property
     def is_os_managed(self) -> bool:
-        """True for system Pythons that are owned by the OS and cannot/should not be deleted."""
-        import sys as _sys
+        """
+        True when the Python is owned by the OS/package-manager and should not
+        be deleted manually.
+
+        - macOS: /usr/bin is SIP-protected; CLT paths are Apple-managed.
+        - Linux: /usr/bin Python is owned by apt/dnf/pacman — deleting it can
+          break system tools. Use the package manager instead.
+        - Windows: system Python under WindowsApps is managed by the Store.
+        """
         s = str(self.path)
-        if _sys.platform == "darwin":
-            # SIP-protected paths and Apple CLT / Xcode installs
+        if sys.platform == "darwin":
             return s.startswith("/usr/bin/") or "/Developer/CommandLineTools" in s
-        return s.startswith("/usr/bin/")
+        if sys.platform.startswith("linux"):
+            return s.startswith("/usr/bin/")
+        if sys.platform == "win32":
+            # Microsoft Store / WindowsApps Pythons are managed
+            appdata = os.environ.get("LOCALAPPDATA", "")
+            return bool(appdata and s.startswith(os.path.join(appdata, "Microsoft", "WindowsApps")))
+        return False
 
     @property
     def recommendation(self) -> str:
         if self.is_os_managed:
-            if self.status in ("eol", "security"):
-                return "UPDATE VIA CLT"
-            return "KEEP"
+            return "UPDATE VIA PKG MGR" if self.status in ("eol", "security") else "KEEP"
         if self.status == "eol":
             return "UPGRADE VENV" if self.is_venv else "DELETE"
         if self.status == "security":
@@ -88,11 +111,11 @@ class PythonInstall:
     @property
     def recommendation_color(self) -> str:
         return {
-            "UPDATE VIA CLT": "bright_cyan",
-            "UPGRADE VENV": "bright_yellow",
-            "DELETE": "bright_red",
-            "CONSIDER UPGRADE": "yellow",
-            "KEEP": "bright_green",
+            "UPDATE VIA PKG MGR": "bright_cyan",
+            "UPGRADE VENV":       "bright_yellow",
+            "DELETE":             "bright_red",
+            "CONSIDER UPGRADE":   "yellow",
+            "KEEP":               "bright_green",
         }[self.recommendation]
 
 
@@ -119,23 +142,46 @@ def get_version(python_path: Path) -> Optional[tuple[tuple[int, int, int], str]]
 
 def _classify_path(path: Path) -> str:
     s = str(path)
+    # Order matters: more specific checks first.
     if ".pyenv" in s:
         return "pyenv"
     if any(k in s for k in ("miniconda", "anaconda", "conda", "mamba", "miniforge")):
         return "conda"
+    # macOS Homebrew
     if "/opt/homebrew" in s or "/usr/local/Cellar" in s or "/usr/local/opt" in s:
         return "brew"
+    # Linux Homebrew (Linuxbrew)
+    if "/home/linuxbrew" in s or "/.linuxbrew" in s:
+        return "brew"
+    # macOS python.org framework
     if "/Library/Frameworks/Python.framework" in s:
         return "python.org"
+    # Windows python.org installer (LOCALAPPDATA\Programs\Python)
+    if sys.platform == "win32":
+        local = os.environ.get("LOCALAPPDATA", "").lower()
+        if local and local in s.lower() and "programs\\python" in s.lower():
+            return "python.org"
+        if "\\scoop\\apps\\python" in s.lower():
+            return "scoop"
+        if "\\chocolatey\\lib\\python" in s.lower():
+            return "chocolatey"
+        if "microsoft\\windowsapps" in s.lower():
+            return "system"
     if s.startswith("/usr/bin") or s.startswith("/usr/local/bin"):
         return "system"
     return "unknown"
 
 
 def scan_path_executables() -> list[Path]:
+    """Find all python executables in PATH, cross-platform."""
     found: set[Path] = set()
-    pattern = re.compile(r"^python(\d+(\.\d+)*)?$")
-    for dir_str in os.environ.get("PATH", "").split(":"):
+    # Unix: python, python3, python3.11 etc.
+    # Windows: python.exe, python3.exe, python3.11.exe
+    unix_pat = re.compile(r"^python(\d+(\.\d+)*)?$")
+    win_pat = re.compile(r"^python(\d+(\.\d+)*)?(\.exe)?$", re.IGNORECASE)
+    pattern = win_pat if sys.platform == "win32" else unix_pat
+
+    for dir_str in os.environ.get("PATH", "").split(os.pathsep):
         dir_path = Path(dir_str)
         if not dir_path.is_dir():
             continue
@@ -151,87 +197,143 @@ def scan_path_executables() -> list[Path]:
     return list(found)
 
 
+def _add_py(path: Path, found: set[Path]) -> None:
+    """Resolve and add a Python executable to the found set."""
+    if path.exists():
+        try:
+            found.add(path.resolve())
+        except (OSError, RuntimeError):
+            found.add(path)
+
+
 def scan_common_dirs() -> list[Path]:
+    """Check well-known install locations for the current platform."""
     found: set[Path] = set()
-    pattern = re.compile(r"^python(\d+(\.\d+)*)?$")
+    unix_pat = re.compile(r"^python(\d+(\.\d+)*)?$")
 
     def _scan_dir(d: Path) -> None:
         if not d.is_dir():
             return
         try:
             for entry in d.iterdir():
-                if pattern.match(entry.name) and (entry.is_file() or entry.is_symlink()):
-                    try:
-                        found.add(entry.resolve())
-                    except (OSError, RuntimeError):
-                        found.add(entry)
+                if unix_pat.match(entry.name) and (entry.is_file() or entry.is_symlink()):
+                    _add_py(entry, found)
         except PermissionError:
             pass
 
-    for d in [Path("/usr/bin"), Path("/usr/local/bin"), Path("/opt/homebrew/bin")]:
-        _scan_dir(d)
+    # ── macOS ──────────────────────────────────────────────────────────────
+    if sys.platform == "darwin":
+        for d in (Path("/usr/bin"), Path("/usr/local/bin"), Path("/opt/homebrew/bin")):
+            _scan_dir(d)
 
-    # python.org framework installs
-    fw = Path("/Library/Frameworks/Python.framework/Versions")
-    if fw.is_dir():
-        try:
-            for vdir in fw.iterdir():
-                py = vdir / "bin" / "python3"
-                if py.exists():
-                    try:
-                        found.add(py.resolve())
-                    except (OSError, RuntimeError):
-                        found.add(py)
-        except PermissionError:
-            pass
+        # python.org framework installs
+        fw = Path("/Library/Frameworks/Python.framework/Versions")
+        if fw.is_dir():
+            try:
+                for vdir in fw.iterdir():
+                    _add_py(vdir / "bin" / "python3", found)
+            except PermissionError:
+                pass
 
-    # pyenv
-    pyenv_versions = Path.home() / ".pyenv" / "versions"
+    # ── Linux ──────────────────────────────────────────────────────────────
+    elif sys.platform.startswith("linux"):
+        for d in (Path("/usr/bin"), Path("/usr/local/bin"), Path("/snap/bin")):
+            _scan_dir(d)
+
+        # Linuxbrew
+        linuxbrew = Path("/home/linuxbrew/.linuxbrew/bin")
+        if not linuxbrew.is_dir():
+            linuxbrew = Path.home() / ".linuxbrew" / "bin"
+        _scan_dir(linuxbrew)
+
+        # Common distro alternatives paths (deadsnakes PPA etc.)
+        for d in (Path("/usr/bin"), Path("/usr/local/bin")):
+            _scan_dir(d)
+
+    # ── Windows ────────────────────────────────────────────────────────────
+    elif sys.platform == "win32":
+        local_app = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
+        prog_files = Path(os.environ.get("PROGRAMFILES", "C:/Program Files"))
+        prog_files_x86 = Path(os.environ.get("PROGRAMFILES(X86)", "C:/Program Files (x86)"))
+
+        # python.org installers (per-user and system-wide)
+        for base in (local_app / "Programs", prog_files, prog_files_x86, Path("C:/")):
+            if not base.is_dir():
+                continue
+            try:
+                for entry in base.iterdir():
+                    if re.match(r"^Python3?\d*$", entry.name, re.IGNORECASE):
+                        _add_py(entry / "python.exe", found)
+            except PermissionError:
+                pass
+
+        # Microsoft Store Python
+        _scan_dir(local_app / "Microsoft" / "WindowsApps")
+
+        # Scoop
+        scoop_apps = Path.home() / "scoop" / "apps" / "python" / "current"
+        _add_py(scoop_apps / "python.exe", found)
+
+        # Chocolatey
+        _add_py(Path("C:/tools/python3/python.exe"), found)
+
+    # ── pyenv (all platforms; pyenv-win on Windows) ─────────────────────
+    pyenv_home = Path.home() / ".pyenv"
+    if sys.platform == "win32":
+        pyenv_versions = pyenv_home / "pyenv-win" / "versions"
+        py_bin = ("python.exe",)
+    else:
+        pyenv_versions = pyenv_home / "versions"
+        py_bin = ("python3", "python")
+
     if pyenv_versions.is_dir():
         try:
             for vdir in pyenv_versions.iterdir():
-                for py_name in ("python3", "python"):
-                    py = vdir / "bin" / py_name
-                    if py.is_file():
-                        try:
-                            found.add(py.resolve())
-                        except (OSError, RuntimeError):
-                            found.add(py)
+                for name in py_bin:
+                    candidate = vdir / ("bin" if sys.platform != "win32" else "") / name
+                    if candidate.is_file():
+                        _add_py(candidate, found)
                         break
         except PermissionError:
             pass
 
-    # conda / mamba envs
+    # ── conda / mamba envs (all platforms) ─────────────────────────────
+    conda_bases: list[Path] = []
     for base_name in ("miniconda3", "miniconda", "anaconda3", "anaconda", "miniforge3", "mambaforge"):
-        base = Path.home() / base_name
-        envs = base / "envs"
-        if envs.is_dir():
-            try:
-                for env_dir in envs.iterdir():
-                    py = env_dir / "bin" / "python3"
-                    if py.is_file():
-                        try:
-                            found.add(py.resolve())
-                        except (OSError, RuntimeError):
-                            found.add(py)
-            except PermissionError:
-                pass
+        conda_bases.append(Path.home() / base_name)
+        if sys.platform == "win32":
+            local_app = Path(os.environ.get("LOCALAPPDATA", ""))
+            if local_app.is_dir():
+                conda_bases.append(local_app / base_name)
 
-    # ~/.conda/envs
-    dot_conda = Path.home() / ".conda" / "envs"
-    if dot_conda.is_dir():
+    conda_bases.append(Path.home() / ".conda")
+
+    py_exec = "python.exe" if sys.platform == "win32" else "python3"
+    for base in conda_bases:
+        envs = base / "envs"
+        if not envs.is_dir():
+            continue
         try:
-            for env_dir in dot_conda.iterdir():
-                py = env_dir / "bin" / "python3"
-                if py.is_file():
-                    try:
-                        found.add(py.resolve())
-                    except (OSError, RuntimeError):
-                        found.add(py)
+            for env_dir in envs.iterdir():
+                candidate = (
+                    env_dir / py_exec
+                    if sys.platform == "win32"
+                    else env_dir / "bin" / py_exec
+                )
+                _add_py(candidate, found)
         except PermissionError:
             pass
 
     return list(found)
+
+
+def _venv_executable(venv_path: Path) -> Optional[Path]:
+    """Return the Python executable inside a venv directory, cross-platform."""
+    for parts in _VENV_PY_CANDIDATES:
+        candidate = venv_path.joinpath(*parts)
+        if candidate.exists():
+            return candidate
+    return None
 
 
 def scan_venvs(
@@ -245,27 +347,24 @@ def scan_venvs(
         if depth > max_depth:
             return
         try:
-            cfg = path / "pyvenv.cfg"
-            if cfg.is_file():
+            if (path / "pyvenv.cfg").is_file():
                 resolved = path.resolve()
                 if resolved in seen_venvs:
                     return
                 seen_venvs.add(resolved)
-                for py_name in ("python3", "python"):
-                    py = path / "bin" / py_name
-                    if py.exists():
-                        try:
-                            results.append((py.resolve(), path.resolve()))
-                        except (OSError, RuntimeError):
-                            results.append((py, path))
-                        return
+                py = _venv_executable(path)
+                if py:
+                    try:
+                        results.append((py.resolve(), resolved))
+                    except (OSError, RuntimeError):
+                        results.append((py, path))
                 return
             for entry in path.iterdir():
                 if (
                     entry.is_dir()
                     and not entry.name.startswith(".")
                     and not entry.is_symlink()
-                    and entry.name not in ("node_modules", "__pycache__", ".git")
+                    and entry.name not in _SCAN_SKIP_DIRS
                 ):
                     _walk(entry, depth + 1)
         except PermissionError:
@@ -279,8 +378,12 @@ def scan_venvs(
 
 
 def get_pip_packages(venv_base: Path) -> list[str]:
-    """Return pip freeze output for a venv."""
-    pip = venv_base / "bin" / "pip"
+    """Return pip freeze output for a venv, cross-platform."""
+    pip = (
+        venv_base / "Scripts" / "pip.exe"
+        if sys.platform == "win32"
+        else venv_base / "bin" / "pip"
+    )
     if not pip.exists():
         return []
     output = _run([str(pip), "freeze"], timeout=15)
