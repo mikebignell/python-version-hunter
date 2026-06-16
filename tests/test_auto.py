@@ -134,14 +134,15 @@ class TestBrewUpgradePython:
     def test_no_python_formulae(self):
         console = _make_console()
         mock_result = MagicMock()
-        mock_result.stdout = "curl\ngit\nnode\n"
+        mock_result.stdout = "curl 8.0\ngit 2.40\nnode 20.0\n"
         with patch("shutil.which", return_value="/usr/bin/brew"), \
              patch("subprocess.run", return_value=mock_result):
             assert brew_upgrade_python(console) is False
 
     def test_dry_run_does_not_call_upgrade(self):
         console = _make_console()
-        mock_list = MagicMock(stdout="python\npython@3.12\ncurl\n")
+        # brew list --formula --versions output format
+        mock_list = MagicMock(stdout="python@3.14 3.14.5\npython@3.13 3.13.13\ncurl 8.0\n")
         with patch("shutil.which", return_value="/usr/bin/brew"), \
              patch("subprocess.run", return_value=mock_list) as mock_run:
             result = brew_upgrade_python(console, dry_run=True)
@@ -149,9 +150,10 @@ class TestBrewUpgradePython:
         # Only the brew list call, not brew upgrade
         assert mock_run.call_count == 1
 
-    def test_calls_brew_upgrade(self):
+    def test_calls_brew_upgrade_latest_only(self):
         console = _make_console()
-        mock_list = MagicMock(stdout="python\ncurl\n")
+        # Has python@3.13 and python@3.14 — should only upgrade python@3.14
+        mock_list = MagicMock(stdout="python@3.14 3.14.5\npython@3.13 3.13.13\ncurl 8.0\n")
         mock_upgrade = MagicMock(returncode=0)
         calls = []
         def side_effect(cmd, **kwargs):
@@ -165,7 +167,8 @@ class TestBrewUpgradePython:
         assert result is True
         upgrade_call = [c for c in calls if "upgrade" in c]
         assert upgrade_call
-        assert "python" in upgrade_call[0]
+        assert "python@3.14" in upgrade_call[0]
+        assert "python@3.13" not in upgrade_call[0]  # old formula not upgraded
 
 
 # ── pyenv_install_latest ──────────────────────────────────────────────────────

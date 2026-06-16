@@ -26,7 +26,7 @@ from pyhunter.actions import (
     suggest_pyenv_upgrade,
     upgrade_venv,
 )
-from pyhunter.auto import run_full_auto, brew_cleanup_old_pythons, find_chained_venvs
+from pyhunter.auto import run_full_auto, brew_cleanup_old_pythons, brew_remove_old_formulae, find_chained_venvs
 from pyhunter.finder import find_all_pythons, PythonInstall
 from pyhunter.versions import CycleInfo, fetch_release_info, latest_patch_for, latest_stable_version
 from pyhunter.ui import (
@@ -230,6 +230,16 @@ def main(
             ),
         ),
     ] = False,
+    brew_remove_old: Annotated[
+        bool,
+        typer.Option(
+            "--brew-remove-old",
+            help=(
+                "Uninstall old Homebrew Python minor-version formulae (e.g. python@3.13 "
+                "when python@3.14 is installed). Migrates dependent venvs first."
+            ),
+        ),
+    ] = False,
     full_auto: Annotated[
         bool,
         typer.Option(
@@ -333,6 +343,17 @@ def main(
     # -- Interactive review --
     if interactive:
         _interactive_review(installs, console, dry_run=dry_run)
+
+    # -- Remove old Homebrew minor-version formulae --
+    if brew_remove_old:
+        print_action_header("BREW REMOVE OLD PYTHON FORMULAE", console)
+        brew_remove_old_formulae(
+            venv_search_paths=venv_paths,
+            target_python=target_python or _best_python(installs),
+            console=console,
+            dry_run=dry_run,
+        )
+        console.print()
 
     # -- Brew Cellar cleanup --
     if brew_cleanup:

@@ -112,7 +112,8 @@ This orchestrates a complete remediation in order:
 2. **`pyenv install <latest>`** — installs the newest Python if you use pyenv
 3. **Broken + chained venv repair** — finds venvs whose source Python was deleted *or* sourced from another venv (fragile coupling), and recreates them with a proper standalone Python
 4. **Upgrade all out-of-date venvs** — recreates every venv on an old cycle/patch, preserving packages + upgrading pip
-5. **Homebrew Cellar cleanup** — upgrades any remaining venvs referencing old Cellar paths, then runs `brew cleanup`
+5. **Remove old Homebrew formulae** — uninstalls `python@3.13` etc. once all venvs have been moved to the latest; migrates any remaining dependent venvs first
+6. **Homebrew Cellar cleanup** — runs `brew cleanup` to remove stale patch-level Cellar entries
 6. **PATH shadowing check** — verifies Homebrew Python comes before `/usr/bin/python3`
 7. **Shell config check** — warns if `brew shellenv` is missing from `.zshrc`/`.bash_profile`
 8. **`.python-version` scan** — flags pyenv pin files that point at EOL versions
@@ -171,7 +172,8 @@ pyhunter --scan-path ~/Projects --scan-path ~/work
 | `--target-python PATH` | `-t` | Python to use when recreating venvs |
 | `--dry-run` | `-n` | Preview changes without applying them |
 | `--no-venvs` | | Skip virtual environment scanning |
-| `--brew-cleanup` | | Remove stale Homebrew Cellar Pythons (upgrades dependent venvs first) |
+| `--brew-remove-old` | | Uninstall old Homebrew Python minor-version formulae (migrates venvs first) |
+| `--brew-cleanup` | | Remove stale Homebrew Cellar patch versions (upgrades dependent venvs first) |
 | `--full-auto` | `-A` | Full automated remediation (upgrade, repair, verify, cleanup) |
 | `--yes` | `-y` | Skip confirmation prompts (use with `--full-auto`) |
 | `--version` | `-V` | Show version and exit |

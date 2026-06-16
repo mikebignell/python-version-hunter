@@ -269,30 +269,158 @@ def _check_python_version_files(console: Console) -> None:
         )
 
 
-# ── Homebrew upgrade ─────────────────────────────────────────────────────────
+# ── Homebrew upgrade + old formula removal ────────────────────────────────────
+
+def _brew_python_formulae() -> list[tuple[str, tuple[int, int]]]:
+    """Return [(formula_name, (major, minor))] for all installed Python formulae."""
+    brew = shutil.which("brew")
+    if not brew:
+        return []
+    result = subprocess.run([brew, "list", "--formula", "--versions"], capture_output=True, text=True)
+    out: list[tuple[str, tuple[int, int]]] = []
+    for line in result.stdout.splitlines():
+        parts = line.split()
+        if not parts:
+            continue
+        name = parts[0]
+        if not re.match(r"^python(@\d+\.\d+)?$", name):
+            continue
+        # Version from formula name (python@3.13) or from installed version string
+        m = re.search(r"@(\d+)\.(\d+)$", name)
+        if m:
+            out.append((name, (int(m.group(1)), int(m.group(2)))))
+        else:
+            # plain "python" — parse version from the version column
+            ver = parts[1] if len(parts) > 1 else ""
+            vm = re.match(r"(\d+)\.(\d+)", ver)
+            if vm:
+                out.append((name, (int(vm.group(1)), int(vm.group(2)))))
+    return out
+
 
 def brew_upgrade_python(console: Console, dry_run: bool = False) -> bool:
-    """Run brew upgrade python for all installed python formulae."""
+    """Upgrade only the latest Homebrew Python formula; skip older minor versions."""
     brew = shutil.which("brew")
     if not brew:
         console.print("  [bright_yellow]Homebrew not found — skipping.[/bright_yellow]")
         return False
 
-    # Find which python formulae are installed
-    result = subprocess.run([brew, "list", "--formula"], capture_output=True, text=True)
-    installed = result.stdout.splitlines()
-    formulae = [f for f in installed if re.match(r"^python(@\d+\.\d+)?$", f)]
-
+    formulae = _brew_python_formulae()
     if not formulae:
         console.print("  [bright_yellow]No Homebrew Python formulae found.[/bright_yellow]")
         return False
 
-    console.print(f"  [bright_cyan]Upgrading:[/bright_cyan] {', '.join(formulae)}")
+    latest_mm = max(mm for _, mm in formulae)
+    latest_formulae = [name for name, mm in formulae if mm == latest_mm]
+    old_formulae    = [name for name, mm in formulae if mm < latest_mm]
+
+    if old_formulae:
+        console.print(
+            f"  [dim]Skipping older formulae (to be removed after venv migration): "
+            f"{', '.join(old_formulae)}[/dim]"
+        )
+
+    console.print(f"  [bright_cyan]Upgrading:[/bright_cyan] {', '.join(latest_formulae)}")
     if dry_run:
-        console.print(f"  [bright_yellow][DRY RUN] Would run: brew upgrade {' '.join(formulae)}[/bright_yellow]")
+        console.print(f"  [bright_yellow][DRY RUN] Would run: brew upgrade {' '.join(latest_formulae)}[/bright_yellow]")
         return True
 
-    return _run_visible([brew, "upgrade"] + formulae, console)
+    return _run_visible([brew, "upgrade"] + latest_formulae, console)
+
+
+def brew_remove_old_formulae(
+    venv_search_paths: list[Path],
+    target_python: Optional[Path],
+    console: Console,
+    dry_run: bool = False,
+) -> None:
+    """
+    Uninstall Homebrew Python formulae for older minor versions.
+    Upgrades any venvs still referencing them first, then removes them.
+    """
+    brew = shutil.which("brew")
+    if not brew:
+        return
+
+    formulae = _brew_python_formulae()
+    if not formulae:
+        return
+
+    latest_mm = max(mm for _, mm in formulae)
+    old_formulae = [(name, mm) for name, mm in formulae if mm < latest_mm]
+
+    if not old_formulae:
+        console.print("  [bright_green]✓ No old Python formulae to remove.[/bright_green]")
+        return
+
+    console.print(
+        f"  [bright_yellow]Old formulae to remove:[/bright_yellow] "
+        f"{', '.join(name for name, _ in old_formulae)}"
+    )
+
+    # Find venvs still referencing these formulae's Cellar paths
+    for formula_name, mm in old_formulae:
+        cellar_pattern = re.compile(
+            rf"/opt/homebrew/Cellar/{re.escape(formula_name)}/"
+            rf"|/usr/local/Cellar/{re.escape(formula_name)}/"
+            rf"|Python\.framework/Versions/{mm[0]}\.{mm[1]}/"
+        )
+
+        live_at_risk: list[Path] = []
+        for venv_root in venv_search_paths:
+            def _check(path: Path, depth: int) -> None:
+                if depth > 5:
+                    return
+                try:
+                    cfg = path / "pyvenv.cfg"
+                    if cfg.is_file():
+                        data = _parse_pyvenv_cfg(cfg)
+                        home = data.get("home", "")
+                        if cellar_pattern.search(home):
+                            live_at_risk.append(path.resolve())
+                        return
+                    for entry in path.iterdir():
+                        try:
+                            if (
+                                entry.is_dir()
+                                and not entry.name.startswith(".")
+                                and not entry.is_symlink()
+                                and entry.name not in _SCAN_SKIP_DIRS
+                            ):
+                                _check(entry, depth + 1)
+                        except _SCAN_ERRORS:
+                            continue
+                except _SCAN_ERRORS:
+                    pass
+            if venv_root.is_dir():
+                _check(venv_root, 0)
+
+        if live_at_risk:
+            console.print(
+                f"  [bright_yellow]⚠  {len(live_at_risk)} venv(s) still reference "
+                f"{formula_name} — upgrading before removal:[/bright_yellow]"
+            )
+            from pyhunter.finder import PythonInstall, scan_venvs
+            venv_results = scan_venvs(venv_search_paths)
+            for venv_path in live_at_risk:
+                matches = [r for r in venv_results if r[1] == venv_path]
+                if matches:
+                    py_path, venv_base, ver_str, install_type = matches[0]
+                    ver_tuple = tuple(int(x) for x in ver_str.split(".")) if ver_str else (0, 0, 0)
+                    inst = PythonInstall(
+                        path=py_path,
+                        version=ver_tuple,
+                        version_str=ver_str or "?",
+                        install_type=install_type,
+                        venv_base=venv_base,
+                    )
+                    upgrade_venv_with_pip(inst, target_python, console, dry_run=dry_run)
+
+        if dry_run:
+            console.print(f"  [bright_yellow][DRY RUN] Would run: brew uninstall {formula_name}[/bright_yellow]")
+        else:
+            console.print(f"  [bright_cyan]Removing {formula_name}…[/bright_cyan]")
+            _run_visible([brew, "uninstall", formula_name], console)
 
 
 # ── Homebrew Cellar cleanup ───────────────────────────────────────────────────
@@ -660,7 +788,12 @@ def run_full_auto(
     else:
         console.print("  [bright_green]✓ All venvs are already up to date.[/bright_green]")
 
-    # ── Brew cleanup ──────────────────────────────────────────────────────
+    # ── Brew: remove old minor-version formulae ───────────────────────────
+    if has_brew:
+        _header("STEP: BREW REMOVE OLD PYTHON FORMULAE")
+        brew_remove_old_formulae(venv_search_paths, target_python, console, dry_run=dry_run)
+
+    # ── Brew cleanup (stale Cellar patches) ───────────────────────────────
     if has_brew:
         _header("STEP: BREW CLEANUP — STALE CELLAR PYTHONS")
         brew_cleanup_old_pythons(venv_search_paths, target_python, console, dry_run=dry_run)
