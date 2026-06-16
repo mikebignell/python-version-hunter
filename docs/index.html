@@ -395,6 +395,16 @@
         <span class="feature-desc">Recreates virtual environments with a newer Python, preserving all installed packages automatically.</span>
       </div>
       <div class="feature-card">
+        <span class="feature-icon">🤖</span>
+        <span class="feature-name">FULL AUTO MODE</span>
+        <span class="feature-desc">One flag fixes everything: upgrades Homebrew Python, repairs broken venvs, upgrades all venvs, verifies PATH shadowing and shell config.</span>
+      </div>
+      <div class="feature-card">
+        <span class="feature-icon">🩹</span>
+        <span class="feature-name">BROKEN VENV REPAIR</span>
+        <span class="feature-desc">Detects venvs whose source Python was silently deleted (e.g. after a brew upgrade) and rebuilds them.</span>
+      </div>
+      <div class="feature-card">
         <span class="feature-icon">🕹️</span>
         <span class="feature-name">INTERACTIVE MODE</span>
         <span class="feature-desc">Step through each problem installation and decide: upgrade, delete, suggest, or skip.</span>
@@ -425,7 +435,9 @@
 
 <span class="prompt">$</span> <span class="cmd">pyhunter --upgrade-venvs</span>         <span class="out"># auto-upgrade all EOL venvs</span>
 
-<span class="prompt">$</span> <span class="cmd">pyhunter --upgrade-venvs --dry-run</span>  <span class="out"># preview only</span></code></pre>
+<span class="prompt">$</span> <span class="cmd">pyhunter --full-auto</span>             <span class="out"># fix everything in one shot</span>
+
+<span class="prompt">$</span> <span class="cmd">pyhunter --full-auto --dry-run</span>   <span class="out"># preview only</span></code></pre>
       </div>
     </div>
   </section>
@@ -452,6 +464,28 @@
     </table>
   </section>
 
+  <!-- ── Full auto mode ── -->
+  <section class="section">
+    <h2 class="section-title">// FULL AUTO MODE</h2>
+    <p>Run <code>pyhunter --full-auto</code> to remediate your entire Python environment in one command:</p>
+    <div class="terminal" style="margin: 1rem 0;">
+      <div class="terminal-content">
+        <pre><code><span class="prompt">$</span> <span class="cmd">pyhunter --full-auto</span>          <span class="out"># interactive confirmation</span>
+<span class="prompt">$</span> <span class="cmd">pyhunter --full-auto --yes</span>     <span class="out"># skip confirmation</span>
+<span class="prompt">$</span> <span class="cmd">pyhunter --full-auto --dry-run</span> <span class="out"># preview only</span></code></pre>
+      </div>
+    </div>
+    <ul>
+      <li><strong>Step 1 — Homebrew upgrade:</strong> runs <code>brew upgrade python</code> for all installed Python formulae</li>
+      <li><strong>Step 2 — pyenv install:</strong> installs the latest stable Python via pyenv and sets it as global default (if pyenv is present)</li>
+      <li><strong>Step 3 — Broken venv scan:</strong> finds venvs whose source Python has been deleted from disk — this happens silently after every <code>brew upgrade</code> or macOS update</li>
+      <li><strong>Step 4 — Broken venv repair:</strong> recreates each broken venv with the new Python, restoring all packages</li>
+      <li><strong>Step 5 — Upgrade out-of-date venvs:</strong> recreates every venv on an old cycle or patch, then upgrades pip inside each one</li>
+      <li><strong>Step 6 — PATH shadowing check:</strong> verifies <code>which python3</code> resolves to Homebrew, not <code>/usr/bin/python3</code></li>
+      <li><strong>Step 7 — Shell config check:</strong> warns if <code>brew shellenv</code> is missing from <code>~/.zshrc</code> / <code>~/.bash_profile</code>; also scans for <code>.python-version</code> files pinning EOL versions</li>
+    </ul>
+  </section>
+
   <!-- ── How venv upgrade works ── -->
   <section class="section">
     <h2 class="section-title">// HOW VENV UPGRADE WORKS</h2>
@@ -460,7 +494,7 @@
       <li>Backs up requirements to <code>&lt;venv_name&gt;_requirements_backup.txt</code></li>
       <li>Deletes the old venv directory</li>
       <li>Creates a new venv with the target Python</li>
-      <li>Reinstalls all packages</li>
+      <li>Reinstalls all packages + upgrades pip</li>
     </ul>
     <p style="margin-top:0.75rem; color: var(--yellow);">
       ⚠ Package compatibility is not guaranteed across Python versions. Review the backup file if reinstall has issues.
