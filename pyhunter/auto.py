@@ -86,6 +86,70 @@ def find_broken_venvs(search_paths: list[Path], max_depth: int = 5) -> list[Brok
     return broken
 
 
+@dataclass
+class ChainedVenv:
+    venv_base: Path
+    chained_home: Path     # the home= path, which is itself inside another venv
+    chained_venv: Path     # the parent venv that home= lives inside
+    python_version: Optional[str]
+
+
+def find_chained_venvs(search_paths: list[Path], max_depth: int = 5) -> list[ChainedVenv]:
+    """
+    Find venvs whose pyvenv.cfg home= path lives inside another venv.
+    This happens when a venv was created using a venv Python (e.g. a tool's
+    own .venv) rather than a standalone Homebrew or system Python.
+    The child venv works as long as the parent venv exists and is unchanged,
+    but is silently broken if the parent venv is deleted or recreated.
+    """
+    chained: list[ChainedVenv] = []
+    seen: set[Path] = set()
+
+    def _walk(path: Path, depth: int) -> None:
+        if depth > max_depth:
+            return
+        try:
+            cfg = path / "pyvenv.cfg"
+            if cfg.is_file():
+                resolved = path.resolve()
+                if resolved in seen:
+                    return
+                seen.add(resolved)
+                data = _parse_pyvenv_cfg(cfg)
+                home = data.get("home")
+                if home:
+                    home_path = Path(home)
+                    # Check if home= path is inside another venv
+                    for parent in home_path.parents:
+                        if (parent / "pyvenv.cfg").exists() and parent.resolve() != resolved:
+                            chained.append(ChainedVenv(
+                                venv_base=resolved,
+                                chained_home=home_path,
+                                chained_venv=parent.resolve(),
+                                python_version=data.get("version"),
+                            ))
+                            break
+                return
+            for entry in path.iterdir():
+                try:
+                    if (
+                        entry.is_dir()
+                        and not entry.name.startswith(".")
+                        and not entry.is_symlink()
+                        and entry.name not in _SCAN_SKIP_DIRS
+                    ):
+                        _walk(entry, depth + 1)
+                except _SCAN_ERRORS:
+                    continue
+        except _SCAN_ERRORS:
+            pass
+
+    for p in search_paths:
+        if p.is_dir():
+            _walk(p, 0)
+    return chained
+
+
 # ── PATH / shell checks ──────────────────────────────────────────────────────
 
 def check_path_shadowing(console: Console) -> bool:
@@ -549,11 +613,13 @@ def run_full_auto(
     if target_python:
         console.print(f"\n  [bright_cyan]Using Python {max(best_candidates, key=lambda i: i.version).version_str} for venv recreation.[/bright_cyan]")
 
-    # ── Step 3+4: Broken venvs ────────────────────────────────────────────
-    _header("STEP: BROKEN VENV SCAN + REPAIR")
+    # ── Step 3+4: Broken + chained venvs ─────────────────────────────────
+    _header("STEP: BROKEN + CHAINED VENV SCAN + REPAIR")
     broken = find_broken_venvs(venv_search_paths)
+    chained = find_chained_venvs(venv_search_paths)
+
     if broken:
-        console.print(f"  [bright_yellow]Found {len(broken)} broken venv(s):[/bright_yellow]")
+        console.print(f"  [bright_yellow]Found {len(broken)} broken venv(s) (source Python deleted):[/bright_yellow]")
         for b in broken:
             console.print(f"    [yellow]{b.venv_base}[/yellow]  [dim](was Python {b.python_version or '?'})[/dim]")
         console.print()
@@ -561,6 +627,30 @@ def run_full_auto(
             repair_broken_venv(b, target_python, console, dry_run=dry_run)
     else:
         console.print("  [bright_green]✓ No broken venvs found.[/bright_green]")
+
+    if chained:
+        console.print(
+            f"\n  [bright_yellow]Found {len(chained)} chained venv(s) "
+            f"(sourced from another venv — fragile coupling):[/bright_yellow]"
+        )
+        for c in chained:
+            console.print(
+                f"    [yellow]{c.venv_base}[/yellow]  "
+                f"[dim]→ home inside {c.chained_venv}[/dim]"
+            )
+        console.print()
+        for c in chained:
+            console.print(f"  [bright_cyan]Repairing chained venv:[/bright_cyan] {c.venv_base}")
+            repair_broken_venv(
+                BrokenVenv(
+                    venv_base=c.venv_base,
+                    missing_home=c.chained_home,
+                    python_version=c.python_version,
+                ),
+                target_python, console, dry_run=dry_run,
+            )
+    elif not broken:
+        console.print("  [bright_green]✓ No chained venvs found.[/bright_green]")
 
     # ── Step 5: Upgrade out-of-date venvs ─────────────────────────────────
     _header(f"STEP: UPGRADE {len(venvs_to_fix)} VENV(S) + PIP")

@@ -110,7 +110,7 @@ This orchestrates a complete remediation in order:
 
 1. **`brew upgrade python`** — upgrades all Homebrew Python formulae to the latest
 2. **`pyenv install <latest>`** — installs the newest Python if you use pyenv
-3. **Broken venv repair** — finds venvs whose source Python was deleted (e.g. after a brew upgrade) and recreates them
+3. **Broken + chained venv repair** — finds venvs whose source Python was deleted *or* sourced from another venv (fragile coupling), and recreates them with a proper standalone Python
 4. **Upgrade all out-of-date venvs** — recreates every venv on an old cycle/patch, preserving packages + upgrading pip
 5. **Homebrew Cellar cleanup** — upgrades any remaining venvs referencing old Cellar paths, then runs `brew cleanup`
 6. **PATH shadowing check** — verifies Homebrew Python comes before `/usr/bin/python3`

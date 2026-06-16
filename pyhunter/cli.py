@@ -26,7 +26,7 @@ from pyhunter.actions import (
     suggest_pyenv_upgrade,
     upgrade_venv,
 )
-from pyhunter.auto import run_full_auto, brew_cleanup_old_pythons
+from pyhunter.auto import run_full_auto, brew_cleanup_old_pythons, find_chained_venvs
 from pyhunter.finder import find_all_pythons, PythonInstall
 from pyhunter.versions import CycleInfo, fetch_release_info, latest_patch_for, latest_stable_version
 from pyhunter.ui import (
@@ -288,6 +288,24 @@ def main(
     console.print(make_results_table(installs, cycles=cycles))
     console.print()
     print_summary(installs, console, cycles=cycles)
+
+    if venv_paths:
+        chained = find_chained_venvs(venv_paths)
+        if chained:
+            console.print()
+            console.print(
+                "[bright_yellow]  ⚠  CHAINED VENV(S) DETECTED[/bright_yellow] — "
+                f"{len(chained)} venv(s) are sourced from another venv's Python "
+                "(fragile — breaks if the parent venv is deleted or recreated):"
+            )
+            for c in chained:
+                console.print(
+                    f"    [yellow]{c.venv_base}[/yellow]  "
+                    f"[dim]Python {c.python_version or '?'} → home inside {c.chained_venv}[/dim]"
+                )
+            console.print(
+                "  Run [bright_green]pyhunter --full-auto[/bright_green] to repair."
+            )
     console.print()
 
     # -- Auto upgrade venvs --
