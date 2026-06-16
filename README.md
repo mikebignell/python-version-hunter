@@ -48,6 +48,16 @@
 
 ## Installation
 
+### One-liner (recommended)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/mikebignell/python-version-hunter/main/install.sh | bash
+```
+
+Checks for Python 3.11+, creates a dedicated venv at `~/.pyhunter`, installs pyhunter into it, and tells you what to add to your shell config.
+
+### Manual
+
 ```bash
 # Clone the repo
 git clone https://github.com/mikebignell/python-version-hunter.git
