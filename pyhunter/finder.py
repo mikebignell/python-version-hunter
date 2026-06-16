@@ -27,9 +27,16 @@ _VENV_PY_CANDIDATES: list[tuple[str, ...]] = [
 ]
 
 # Directories skipped during recursive venv scan.
-_SCAN_SKIP_DIRS = frozenset(
-    {"node_modules", "__pycache__", ".git", ".tox", "dist", "build", "site-packages"}
-)
+_SCAN_SKIP_DIRS = frozenset({
+    "node_modules", "__pycache__", ".git", ".tox", "dist", "build", "site-packages",
+    # macOS system/sync dirs that contain no venvs and may raise InterruptedError
+    "Library", "System", "Applications",
+    # Cloud-sync roots
+    "OneDrive", "Dropbox", "Google Drive", "iCloud Drive",
+})
+
+# Errors to swallow when scanning directories.
+_SCAN_ERRORS = (PermissionError, InterruptedError, OSError)
 
 
 @dataclass
@@ -192,7 +199,7 @@ def scan_path_executables() -> list[Path]:
                         found.add(entry.resolve())
                     except (OSError, RuntimeError):
                         found.add(entry)
-        except PermissionError:
+        except _SCAN_ERRORS:
             continue
     return list(found)
 
@@ -218,7 +225,7 @@ def scan_common_dirs() -> list[Path]:
             for entry in d.iterdir():
                 if unix_pat.match(entry.name) and (entry.is_file() or entry.is_symlink()):
                     _add_py(entry, found)
-        except PermissionError:
+        except _SCAN_ERRORS:
             pass
 
     # ── macOS ──────────────────────────────────────────────────────────────
@@ -294,7 +301,7 @@ def scan_common_dirs() -> list[Path]:
                     if candidate.is_file():
                         _add_py(candidate, found)
                         break
-        except PermissionError:
+        except _SCAN_ERRORS:
             pass
 
     # ── conda / mamba envs (all platforms) ─────────────────────────────
@@ -321,7 +328,7 @@ def scan_common_dirs() -> list[Path]:
                     else env_dir / "bin" / py_exec
                 )
                 _add_py(candidate, found)
-        except PermissionError:
+        except _SCAN_ERRORS:
             pass
 
     return list(found)
@@ -360,14 +367,17 @@ def scan_venvs(
                         results.append((py, path))
                 return
             for entry in path.iterdir():
-                if (
-                    entry.is_dir()
-                    and not entry.name.startswith(".")
-                    and not entry.is_symlink()
-                    and entry.name not in _SCAN_SKIP_DIRS
-                ):
-                    _walk(entry, depth + 1)
-        except PermissionError:
+                try:
+                    if (
+                        entry.is_dir()
+                        and not entry.name.startswith(".")
+                        and not entry.is_symlink()
+                        and entry.name not in _SCAN_SKIP_DIRS
+                    ):
+                        _walk(entry, depth + 1)
+                except _SCAN_ERRORS:
+                    continue
+        except _SCAN_ERRORS:
             pass
 
     for p in search_paths:
