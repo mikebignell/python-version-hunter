@@ -435,14 +435,27 @@
     </div>
   </section>
 
+  <!-- ── Install ── -->
+  <section class="section">
+    <h2 class="section-title">// INSTALL</h2>
+    <p>Paste this into your terminal. Requires Python 3.11+ — the script will tell you if you don't have one.</p>
+    <div class="terminal" style="margin: 1rem 0;">
+      <div class="terminal-content">
+        <pre><code><span class="prompt">$</span> <span class="cmd">curl -fsSL https://raw.githubusercontent.com/mikebignell/python-version-hunter/main/install.sh | bash</span></code></pre>
+      </div>
+    </div>
+    <p style="color: var(--dim-text, #666); font-size: 0.9rem;">
+      Creates a dedicated venv at <code>~/.pyhunter</code>, installs pyhunter into it, and prints the one line to add to your shell config.
+      No system packages modified.
+    </p>
+  </section>
+
   <!-- ── Quick start ── -->
   <section class="section">
     <h2 class="section-title">// QUICK START</h2>
     <div class="terminal">
       <div class="terminal-content">
-        <pre><code><span class="prompt">$</span> <span class="cmd">curl -fsSL https://raw.githubusercontent.com/mikebignell/python-version-hunter/main/install.sh | bash</span>
-
-<span class="prompt">$</span> <span class="cmd">pyhunter</span>                          <span class="out"># scan and report</span>
+        <pre><code><span class="prompt">$</span> <span class="cmd">pyhunter</span>                          <span class="out"># scan and report</span>
 
 <span class="prompt">$</span> <span class="cmd">pyhunter --interactive</span>           <span class="out"># decide for each issue</span>
 
