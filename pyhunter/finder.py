@@ -58,7 +58,21 @@ class PythonInstall:
         }[self.status]
 
     @property
+    def is_os_managed(self) -> bool:
+        """True for system Pythons that are owned by the OS and cannot/should not be deleted."""
+        import sys as _sys
+        s = str(self.path)
+        if _sys.platform == "darwin":
+            # SIP-protected paths and Apple CLT / Xcode installs
+            return s.startswith("/usr/bin/") or "/Developer/CommandLineTools" in s
+        return s.startswith("/usr/bin/")
+
+    @property
     def recommendation(self) -> str:
+        if self.is_os_managed:
+            if self.status in ("eol", "security"):
+                return "UPDATE VIA CLT"
+            return "KEEP"
         if self.status == "eol":
             return "UPGRADE VENV" if self.is_venv else "DELETE"
         if self.status == "security":
@@ -68,6 +82,7 @@ class PythonInstall:
     @property
     def recommendation_color(self) -> str:
         return {
+            "UPDATE VIA CLT": "bright_cyan",
             "UPGRADE VENV": "bright_yellow",
             "DELETE": "bright_red",
             "CONSIDER UPGRADE": "yellow",

@@ -18,6 +18,7 @@ from rich.progress import (
 
 from pyhunter import __version__
 from pyhunter.actions import (
+    advise_clt_update,
     delete_python,
     suggest_brew_upgrade,
     suggest_pyenv_upgrade,
@@ -103,27 +104,40 @@ def _interactive_review(installs: list[PythonInstall], console, dry_run: bool) -
             console.print(f"  Venv base: [dim]{inst.venv_base}[/dim]")
 
         # Build choices
+        valid_keys: list[str] = []
         choices: list[str] = []
         if inst.is_venv:
             choices.append("[U]pgrade venv")
-        if not inst.is_current:
+            valid_keys.append("u")
+        if inst.is_os_managed:
+            choices.append("[A]dvise CLT update")
+            valid_keys.append("a")
+        elif not inst.is_current:
             choices.append("[D]elete")
+            valid_keys.append("d")
         if inst.install_type in ("brew",):
             choices.append("[S]uggest brew upgrade")
-        if inst.install_type == "pyenv":
+            if "s" not in valid_keys:
+                valid_keys.append("s")
+        elif inst.install_type == "pyenv":
             choices.append("[S]uggest pyenv upgrade")
+            if "s" not in valid_keys:
+                valid_keys.append("s")
         choices.append("[K]eep / skip")
+        valid_keys.append("k")
 
         choice_str = "  ".join(choices)
         console.print(f"  Options: [bright_magenta]{choice_str}[/bright_magenta]")
         answer = Prompt.ask(
             "  [bright_cyan]Action[/bright_cyan]",
-            choices=["u", "d", "s", "k"],
+            choices=valid_keys,
             default="k",
         ).lower()
 
         if answer == "u" and inst.is_venv:
             upgrade_venv(inst, None, console, dry_run=dry_run)
+        elif answer == "a":
+            advise_clt_update(inst, console)
         elif answer == "d":
             delete_python(inst, console, dry_run=dry_run)
         elif answer == "s":

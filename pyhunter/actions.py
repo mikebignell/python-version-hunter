@@ -84,10 +84,50 @@ def upgrade_venv(
     return True
 
 
+def advise_clt_update(install: PythonInstall, console: Console) -> None:
+    """Explain how to update an OS-managed Python via CLT / Software Update."""
+    console.print(
+        f"\n[bright_cyan]System Python {install.version_str} at {install.path}[/bright_cyan]"
+    )
+    console.print(
+        "  This Python is [bright_yellow]managed by macOS[/bright_yellow] (SIP-protected — "
+        "cannot be deleted even with sudo).\n"
+        "  The OS needs it; other tools (Xcode, Git, build scripts) call it directly.\n"
+    )
+    console.print("  [bright_cyan]How to get a newer system Python:[/bright_cyan]")
+    console.print(
+        "  [bright_green]softwareupdate --all --install --force[/bright_green]"
+        "  [dim]# pull all macOS/CLT updates[/dim]"
+    )
+    console.print(
+        "  [bright_green]xcode-select --install[/bright_green]"
+        "  [dim]# re-install Command Line Tools[/dim]\n"
+    )
+    console.print("  [bright_cyan]Better practice — shadow it with Homebrew Python:[/bright_cyan]")
+    console.print(
+        "  [bright_green]brew install python[/bright_green]           "
+        "[dim]# installs /opt/homebrew/bin/python3[/dim]"
+    )
+    console.print(
+        "  Make sure [bright_green]/opt/homebrew/bin[/bright_green] (or "
+        "[bright_green]/usr/local/bin[/bright_green] on Intel) comes [bold]before[/bold] "
+        "[bright_green]/usr/bin[/bright_green] in your PATH.\n"
+        "  Then [bright_green]python3[/bright_green] in your shell will use the Homebrew "
+        "version, leaving the system one untouched."
+    )
+
+
 def delete_python(
     install: PythonInstall, console: Console, dry_run: bool = False
 ) -> bool:
     """Delete a Python executable (with safety checks)."""
+    if install.is_os_managed:
+        console.print(
+            "[bright_red]✗ Refusing to delete a macOS system Python — "
+            "it is SIP-protected and required by the OS.[/bright_red]"
+        )
+        advise_clt_update(install, console)
+        return False
     if install.is_current:
         console.print(
             "[bright_red]✗ Refusing to delete the currently running Python.[/bright_red]"

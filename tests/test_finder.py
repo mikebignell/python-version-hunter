@@ -174,6 +174,28 @@ class TestScanVenvs:
 # EOL / security sets sanity check
 # ---------------------------------------------------------------------------
 
+class TestIsOsManaged:
+    def test_usr_bin_is_os_managed(self):
+        inst = _make_install(3, 9)
+        inst.path = Path("/usr/bin/python3")
+        assert inst.is_os_managed
+
+    def test_brew_is_not_os_managed(self):
+        inst = _make_install(3, 9)
+        inst.path = Path("/opt/homebrew/bin/python3")
+        assert not inst.is_os_managed
+
+    def test_os_managed_eol_recommends_clt(self):
+        inst = _make_install(3, 9)
+        inst.path = Path("/usr/bin/python3")
+        assert inst.recommendation == "UPDATE VIA CLT"
+
+    def test_non_system_eol_recommends_delete(self):
+        inst = _make_install(3, 9)
+        inst.path = Path("/opt/homebrew/bin/python3")
+        assert inst.recommendation == "DELETE"
+
+
 class TestVersionSets:
     def test_python39_in_eol(self):
         assert (3, 9) in EOL_VERSIONS
