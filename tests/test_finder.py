@@ -343,6 +343,47 @@ class TestVenvDetectionViaParentCfg:
     """Regression: Python binaries inside a venv dir must be detected as venvs
     even when scan_venvs found a sibling executable (e.g. python3 vs python3.14)."""
 
+    def test_find_all_pythons_classifies_venv_sibling_symlink_as_venv(self, tmp_path):
+        """Symlink case: python3.14 in venv bin symlinks OUT of the venv dir.
+        resolve() escapes the venv, so we must check the original path."""
+        from unittest.mock import patch as _patch
+        from pyhunter.finder import find_all_pythons
+        import os
+
+        venv = tmp_path / "myenv"
+        bin_dir = venv / "bin"
+        bin_dir.mkdir(parents=True)
+        (venv / "pyvenv.cfg").write_text("home = /opt/homebrew/bin\nversion = 3.14.5\n")
+
+        # Simulate the real python binary outside the venv
+        real_python = tmp_path / "real_python3.14"
+        real_python.write_text("#!/bin/sh\necho 'Python 3.14.5'\n")
+        real_python.chmod(0o755)
+
+        # python3 in venv bin is a symlink → real_python (resolves OUTSIDE venv)
+        py3_link = bin_dir / "python3"
+        py3_link.symlink_to(real_python)
+
+        # python3.14 in venv bin is also a symlink → same real_python
+        py314_link = bin_dir / "python3.14"
+        py314_link.symlink_to(real_python)
+
+        with _patch("pyhunter.finder.scan_path_executables", return_value=[py314_link]), \
+             _patch("pyhunter.finder.scan_common_dirs", return_value=[]), \
+             _patch("pyhunter.finder.scan_venvs", return_value=[(py3_link.resolve(), venv.resolve())]), \
+             _patch("pyhunter.finder.get_version", return_value=((3, 14, 5), "3.14.5")):
+            installs = find_all_pythons(venv_search_paths=[tmp_path])
+
+        # The symlink resolves to real_python (outside venv dir), but the
+        # original path is inside the venv — must still be classified as venv.
+        for inst in installs:
+            if inst.version == (3, 14, 5):
+                assert inst.venv_base is not None, (
+                    "python3.14 symlink inside venv dir not detected as venv even "
+                    "though it resolves outside the venv"
+                )
+                break
+
     def test_find_all_pythons_classifies_venv_sibling_as_venv(self, tmp_path):
         from unittest.mock import patch as _patch
         from pyhunter.finder import find_all_pythons

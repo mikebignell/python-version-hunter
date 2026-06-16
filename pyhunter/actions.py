@@ -181,6 +181,17 @@ def upgrade_venv(
     new_ver_result = get_version(Path(new_python))
     new_ver_str = new_ver_result[1] if new_ver_result else new_python
 
+    # Guard: if the target is not actually newer, there's nothing to do.
+    # This happens when endoflife.date reports a newer patch but the only
+    # locally available Python is the same version the venv is already on.
+    if new_ver_result and new_ver_result[0] <= install.version:
+        console.print(
+            f"\n[bright_yellow]Skipping venv:[/bright_yellow] {venv_path}\n"
+            f"  Target Python ({new_ver_str}) is not newer than current ({install.version_str}) — "
+            f"run [bright_green]brew upgrade python[/bright_green] first to get a newer version."
+        )
+        return True
+
     console.print(
         f"\n[bright_cyan]Upgrading venv:[/bright_cyan] {venv_path}\n"
         f"  [dim]{install.version_str}[/dim] [{install.status_color}]({install.status_label})[/{install.status_color}]"

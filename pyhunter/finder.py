@@ -491,14 +491,18 @@ def find_all_pythons(
 
         venv_base = venv_map.get(resolved) or venv_map.get(path)
 
-        # venv_map is keyed by the one executable scan_venvs happened to find
-        # (e.g. bin/python3).  If PATH also exposed a sibling in the same venv
-        # bin dir (e.g. bin/python3.14), the map lookup above will miss it.
-        # Walk parents to catch that case.
+        # venv_map is keyed by whichever sibling scan_venvs found (e.g. bin/python3).
+        # PATH may expose another sibling (e.g. bin/python3.14).  We must check the
+        # ORIGINAL (pre-resolve) path because venv Pythons are often symlinks that
+        # resolve OUT of the venv dir to the framework/brew binary — walking parents
+        # of the resolved path would never find pyvenv.cfg in that case.
         if venv_base is None:
-            for parent in resolved.parents:
-                if (parent / "pyvenv.cfg").exists():
-                    venv_base = parent
+            for check_path in dict.fromkeys([path, resolved]):  # original first, deduped
+                for parent in check_path.parents:
+                    if (parent / "pyvenv.cfg").exists():
+                        venv_base = parent
+                        break
+                if venv_base is not None:
                     break
 
         install_type = "venv" if venv_base else _classify_path(resolved)
