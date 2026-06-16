@@ -26,6 +26,7 @@ from pyhunter.actions import (
     suggest_pyenv_upgrade,
     upgrade_venv,
 )
+from pyhunter.auto import run_full_auto
 from pyhunter.finder import find_all_pythons, PythonInstall
 from pyhunter.versions import CycleInfo, fetch_release_info, latest_patch_for, latest_stable_version
 from pyhunter.ui import (
@@ -95,7 +96,10 @@ def _scan_with_progress(
 
 def _interactive_review(installs: list[PythonInstall], console, dry_run: bool) -> None:
     """Walk the user through each non-OK installation one at a time."""
-    issues = [i for i in installs if i.status != "supported" or i.has_newer_patch or i.is_python2]
+    issues = [
+        i for i in installs
+        if i.status != "supported" or i.has_newer_patch or i.has_newer_cycle or i.is_python2
+    ]
     if not issues:
         print_no_issues(console)
         return
@@ -205,6 +209,20 @@ def main(
         bool,
         typer.Option("--no-venvs", help="Skip virtual environment scanning."),
     ] = False,
+    full_auto: Annotated[
+        bool,
+        typer.Option(
+            "--full-auto", "-A",
+            help=(
+                "Full auto-remediation: upgrade Homebrew Python, repair broken venvs, "
+                "upgrade all venvs to the latest Python, and verify PATH + shell config."
+            ),
+        ),
+    ] = False,
+    yes: Annotated[
+        bool,
+        typer.Option("--yes", "-y", help="Skip confirmation prompts (use with --full-auto)."),
+    ] = False,
     version: Annotated[
         Optional[bool],
         typer.Option("--version", "-V", callback=_version_callback, is_eager=True, help="Show version."),
@@ -277,6 +295,19 @@ def main(
     if interactive:
         _interactive_review(installs, console, dry_run=dry_run)
 
+    # -- Full auto mode --
+    if full_auto:
+        latest = latest_stable_version(cycles) if cycles else None
+        run_full_auto(
+            installs=installs,
+            latest_stable=latest,
+            venv_search_paths=venv_paths,
+            console=console,
+            dry_run=dry_run,
+            yes=yes,
+        )
+        return
+
     # -- Plain scan advice --
     if not interactive and not upgrade_venvs:
         eol = [i for i in installs if i.status == "eol"]
@@ -285,5 +316,6 @@ def main(
             console.print(
                 "[bright_yellow]  TIP:[/bright_yellow] Run with "
                 "[bright_green]--interactive[/bright_green] to decide what to do with each issue, "
-                "or [bright_green]--upgrade-venvs[/bright_green] to auto-upgrade venvs.\n"
+                "[bright_green]--upgrade-venvs[/bright_green] to auto-upgrade venvs, or "
+                "[bright_green]--full-auto[/bright_green] for full automated remediation.\n"
             )

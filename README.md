@@ -95,6 +95,36 @@ Specify a target Python explicitly:
 pyhunter --upgrade-venvs --target-python /opt/homebrew/bin/python3.12
 ```
 
+### Full auto mode
+
+One command to fix everything:
+
+```bash
+pyhunter --full-auto
+```
+
+This orchestrates a complete remediation in order:
+
+1. **`brew upgrade python`** — upgrades all Homebrew Python formulae to the latest
+2. **`pyenv install <latest>`** — installs the newest Python if you use pyenv
+3. **Broken venv repair** — finds venvs whose source Python was deleted (e.g. after a brew upgrade) and recreates them
+4. **Upgrade all out-of-date venvs** — recreates every venv on an old cycle/patch with the new Python, preserving packages + upgrading pip
+5. **PATH shadowing check** — verifies Homebrew Python comes before `/usr/bin/python3`
+6. **Shell config check** — warns if `brew shellenv` is missing from `.zshrc`/`.bash_profile`
+7. **`.python-version` scan** — flags pyenv pin files that point at EOL versions
+
+Skip the confirmation prompt:
+
+```bash
+pyhunter --full-auto --yes
+```
+
+Preview without making changes:
+
+```bash
+pyhunter --full-auto --dry-run
+```
+
 ### Dry run
 
 Preview everything without making changes:
@@ -123,6 +153,8 @@ pyhunter --scan-path ~/Projects --scan-path ~/work
 | `--target-python PATH` | `-t` | Python to use when recreating venvs |
 | `--dry-run` | `-n` | Preview changes without applying them |
 | `--no-venvs` | | Skip virtual environment scanning |
+| `--full-auto` | `-A` | Full automated remediation (upgrade, repair, verify) |
+| `--yes` | `-y` | Skip confirmation prompts (use with `--full-auto`) |
 | `--version` | `-V` | Show version and exit |
 
 ---
