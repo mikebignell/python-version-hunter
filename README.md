@@ -108,11 +108,11 @@ pyhunter --full-auto
 
 This orchestrates a complete remediation in order:
 
-1. **`brew upgrade python`** — upgrades all Homebrew Python formulae to the latest
+1. **`brew upgrade python`** — checks `brew outdated` first; skips entirely if already current. Upgrades only the latest minor-version formula (e.g. `python@3.14`); older formulae are skipped here and removed in step 5
 2. **`pyenv install <latest>`** — installs the newest Python if you use pyenv
 3. **Broken + chained venv repair** — finds venvs whose source Python was deleted *or* sourced from another venv (fragile coupling), and recreates them with a proper standalone Python
 4. **Upgrade all out-of-date venvs** — recreates every venv on an old cycle/patch, preserving packages + upgrading pip
-5. **Remove old Homebrew formulae** — uninstalls `python@3.13` etc. once all venvs have been moved to the latest; migrates any remaining dependent venvs first
+5. **Remove old Homebrew formulae** — migrates any remaining dependent venvs first; installs matching new-version companions (e.g. `python-tk@3.14`) before removing old ones (e.g. `python-tk@3.13`) so no functionality is lost; skips with a warning if an unrelated formula depends on the old Python
 6. **Homebrew Cellar cleanup** — runs `brew cleanup` to remove stale patch-level Cellar entries
 6. **PATH shadowing check** — verifies Homebrew Python comes before `/usr/bin/python3`
 7. **Shell config check** — warns if `brew shellenv` is missing from `.zshrc`/`.bash_profile`

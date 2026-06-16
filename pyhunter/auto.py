@@ -320,12 +320,25 @@ def brew_upgrade_python(console: Console, dry_run: bool = False) -> bool:
             f"{', '.join(old_formulae)}[/dim]"
         )
 
-    console.print(f"  [bright_cyan]Upgrading:[/bright_cyan] {', '.join(latest_formulae)}")
-    if dry_run:
-        console.print(f"  [bright_yellow][DRY RUN] Would run: brew upgrade {' '.join(latest_formulae)}[/bright_yellow]")
+    # Check which of the latest formulae actually need upgrading
+    outdated_result = subprocess.run(
+        [brew, "outdated", "--formula"], capture_output=True, text=True
+    )
+    outdated = set(outdated_result.stdout.splitlines())
+    to_upgrade = [f for f in latest_formulae if f in outdated]
+
+    if not to_upgrade:
+        console.print(
+            f"  [bright_green]✓ Already up to date:[/bright_green] {', '.join(latest_formulae)}"
+        )
         return True
 
-    return _run_visible([brew, "upgrade"] + latest_formulae, console)
+    console.print(f"  [bright_cyan]Upgrading:[/bright_cyan] {', '.join(to_upgrade)}")
+    if dry_run:
+        console.print(f"  [bright_yellow][DRY RUN] Would run: brew upgrade {' '.join(to_upgrade)}[/bright_yellow]")
+        return True
+
+    return _run_visible([brew, "upgrade"] + to_upgrade, console)
 
 
 def brew_remove_old_formulae(
@@ -416,11 +429,65 @@ def brew_remove_old_formulae(
                     )
                     upgrade_venv_with_pip(inst, target_python, console, dry_run=dry_run)
 
+        # Check for dependents that would block uninstall
+        dep_result = subprocess.run(
+            [brew, "uses", "--installed", formula_name],
+            capture_output=True, text=True,
+        )
+        dependents = [d.strip() for d in dep_result.stdout.splitlines() if d.strip()]
+        old_suffix  = f"@{mm[0]}.{mm[1]}"
+        new_suffix  = f"@{latest_mm[0]}.{latest_mm[1]}"
+        # Same-version companions (e.g. python-tk@3.13) are safe to remove alongside
+        safe_to_remove = [d for d in dependents if d.endswith(old_suffix)]
+        blockers       = [d for d in dependents if d not in safe_to_remove]
+
+        if blockers:
+            console.print(
+                f"  [bright_yellow]⚠  Skipping {formula_name} — required by: "
+                f"{', '.join(blockers)}[/bright_yellow]\n"
+                f"  [dim]Run [bright_white]brew uses --installed {formula_name}[/bright_white] "
+                f"to investigate, then remove manually.[/dim]"
+            )
+            continue
+
+        # For each companion being removed, offer the equivalent new-version formula
+        # (e.g. python-tk@3.13 → python-tk@3.14) so functionality isn't silently lost.
+        companions_to_upgrade: list[tuple[str, str]] = []  # (old, new)
+        for companion in safe_to_remove:
+            base = companion[: -len(old_suffix)]  # e.g. "python-tk"
+            new_companion = f"{base}{new_suffix}"
+            # Check if already installed
+            already = subprocess.run(
+                [brew, "list", "--formula", new_companion],
+                capture_output=True, text=True,
+            )
+            if already.returncode != 0:
+                companions_to_upgrade.append((companion, new_companion))
+
+        formulae_to_remove = safe_to_remove + [formula_name]
         if dry_run:
-            console.print(f"  [bright_yellow][DRY RUN] Would run: brew uninstall {formula_name}[/bright_yellow]")
+            for old_c, new_c in companions_to_upgrade:
+                console.print(
+                    f"  [bright_yellow][DRY RUN] Would install {new_c} "
+                    f"(replacement for {old_c})[/bright_yellow]"
+                )
+            console.print(
+                f"  [bright_yellow][DRY RUN] Would run: "
+                f"brew uninstall {' '.join(formulae_to_remove)}[/bright_yellow]"
+            )
         else:
-            console.print(f"  [bright_cyan]Removing {formula_name}…[/bright_cyan]")
-            _run_visible([brew, "uninstall", formula_name], console)
+            for old_c, new_c in companions_to_upgrade:
+                console.print(
+                    f"  [bright_cyan]Installing {new_c}[/bright_cyan] "
+                    f"[dim](replacement for {old_c})[/dim]"
+                )
+                _run_visible([brew, "install", new_c], console)
+            if safe_to_remove:
+                console.print(
+                    f"  [dim]Also removing companion formulae: {', '.join(safe_to_remove)}[/dim]"
+                )
+            console.print(f"  [bright_cyan]Removing {' '.join(formulae_to_remove)}…[/bright_cyan]")
+            _run_visible([brew, "uninstall"] + formulae_to_remove, console)
 
 
 # ── Homebrew Cellar cleanup ───────────────────────────────────────────────────

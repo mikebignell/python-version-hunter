@@ -10,6 +10,7 @@ import pytest
 from pyhunter.auto import (
     BrokenVenv,
     _parse_pyvenv_cfg,
+    brew_remove_old_formulae,
     brew_upgrade_python,
     check_path_shadowing,
     check_shell_config,
@@ -139,28 +140,49 @@ class TestBrewUpgradePython:
              patch("subprocess.run", return_value=mock_result):
             assert brew_upgrade_python(console) is False
 
-    def test_dry_run_does_not_call_upgrade(self):
+    def test_already_up_to_date_skips_upgrade(self):
         console = _make_console()
-        # brew list --formula --versions output format
-        mock_list = MagicMock(stdout="python@3.14 3.14.5\npython@3.13 3.13.13\ncurl 8.0\n")
-        with patch("shutil.which", return_value="/usr/bin/brew"), \
-             patch("subprocess.run", return_value=mock_list) as mock_run:
-            result = brew_upgrade_python(console, dry_run=True)
-        assert result is True
-        # Only the brew list call, not brew upgrade
-        assert mock_run.call_count == 1
-
-    def test_calls_brew_upgrade_latest_only(self):
-        console = _make_console()
-        # Has python@3.13 and python@3.14 — should only upgrade python@3.14
-        mock_list = MagicMock(stdout="python@3.14 3.14.5\npython@3.13 3.13.13\ncurl 8.0\n")
-        mock_upgrade = MagicMock(returncode=0)
         calls = []
         def side_effect(cmd, **kwargs):
             calls.append(cmd)
             if "list" in cmd:
-                return mock_list
-            return mock_upgrade
+                return MagicMock(stdout="python@3.14 3.14.5\ncurl 8.0\n")
+            if "outdated" in cmd:
+                return MagicMock(stdout="")  # nothing outdated
+            return MagicMock(returncode=0)
+        with patch("shutil.which", return_value="/opt/homebrew/bin/brew"), \
+             patch("subprocess.run", side_effect=side_effect):
+            result = brew_upgrade_python(console, dry_run=False)
+        assert result is True
+        assert not any("upgrade" in c for c in calls)
+
+    def test_dry_run_does_not_call_upgrade(self):
+        console = _make_console()
+        calls = []
+        def side_effect(cmd, **kwargs):
+            calls.append(cmd)
+            if "list" in cmd:
+                return MagicMock(stdout="python@3.14 3.14.5\npython@3.13 3.13.13\ncurl 8.0\n")
+            if "outdated" in cmd:
+                return MagicMock(stdout="python@3.14\n")
+            return MagicMock(returncode=0)
+        with patch("shutil.which", return_value="/usr/bin/brew"), \
+             patch("subprocess.run", side_effect=side_effect):
+            result = brew_upgrade_python(console, dry_run=True)
+        assert result is True
+        assert not any("upgrade" in c for c in calls)
+
+    def test_calls_brew_upgrade_latest_only(self):
+        console = _make_console()
+        # Has python@3.13 and python@3.14 — should only upgrade python@3.14
+        calls = []
+        def side_effect(cmd, **kwargs):
+            calls.append(cmd)
+            if "list" in cmd:
+                return MagicMock(stdout="python@3.14 3.14.5\npython@3.13 3.13.13\ncurl 8.0\n")
+            if "outdated" in cmd:
+                return MagicMock(stdout="python@3.14\n")
+            return MagicMock(returncode=0)
         with patch("shutil.which", return_value="/opt/homebrew/bin/brew"), \
              patch("subprocess.run", side_effect=side_effect):
             result = brew_upgrade_python(console, dry_run=False)
@@ -169,6 +191,108 @@ class TestBrewUpgradePython:
         assert upgrade_call
         assert "python@3.14" in upgrade_call[0]
         assert "python@3.13" not in upgrade_call[0]  # old formula not upgraded
+
+
+# ── brew_remove_old_formulae ──────────────────────────────────────────────────
+
+class TestBrewRemoveOldFormulae:
+    def _make_side_effect(self, *, dependents: str = "", no_venvs: bool = True):
+        """Return a subprocess.run side_effect for remove-old-formulae tests."""
+        def side_effect(cmd, **kwargs):
+            cmd_str = " ".join(str(c) for c in cmd)
+            if "list" in cmd_str and "versions" in cmd_str:
+                return MagicMock(stdout="python@3.14 3.14.5\npython@3.13 3.13.13\ncurl 8.0\n")
+            if "uses" in cmd_str and "installed" in cmd_str:
+                return MagicMock(stdout=dependents)
+            return MagicMock(returncode=0, stdout="")
+        return side_effect
+
+    def test_no_old_formulae_reports_clean(self, tmp_path):
+        console = _make_console()
+        def side_effect(cmd, **kwargs):
+            if "list" in " ".join(str(c) for c in cmd):
+                return MagicMock(stdout="python@3.14 3.14.5\ncurl 8.0\n")
+            return MagicMock(returncode=0, stdout="")
+        with patch("shutil.which", return_value="/opt/homebrew/bin/brew"), \
+             patch("subprocess.run", side_effect=side_effect):
+            brew_remove_old_formulae([tmp_path], None, console, dry_run=False)
+
+    def test_skips_formula_with_blocker_dependent(self, tmp_path):
+        console = _make_console()
+        calls = []
+        def side_effect(cmd, **kwargs):
+            calls.append(list(cmd))
+            cmd_str = " ".join(str(c) for c in cmd)
+            if "list" in cmd_str and "versions" in cmd_str:
+                return MagicMock(stdout="python@3.14 3.14.5\npython@3.13 3.13.13\n")
+            if "uses" in cmd_str and "installed" in cmd_str:
+                return MagicMock(stdout="some-other-formula\n")  # unrelated dependent
+            return MagicMock(returncode=0, stdout="")
+        with patch("shutil.which", return_value="/opt/homebrew/bin/brew"), \
+             patch("subprocess.run", side_effect=side_effect):
+            brew_remove_old_formulae([tmp_path], None, console, dry_run=False)
+        assert not any("uninstall" in " ".join(c) for c in calls)
+
+    def test_removes_companion_versioned_formulae(self, tmp_path):
+        console = _make_console()
+        calls = []
+        def side_effect(cmd, **kwargs):
+            calls.append(list(cmd))
+            cmd_str = " ".join(str(c) for c in cmd)
+            if "list" in cmd_str and "versions" in cmd_str:
+                return MagicMock(stdout="python@3.14 3.14.5\npython@3.13 3.13.13\n")
+            if "uses" in cmd_str and "installed" in cmd_str:
+                return MagicMock(stdout="python-tk@3.13\n")  # same-version companion
+            if "list" in cmd_str and "python-tk@3.14" in cmd_str:
+                return MagicMock(returncode=0, stdout="python-tk@3.14\n")  # already installed
+            return MagicMock(returncode=0, stdout="")
+        with patch("shutil.which", return_value="/opt/homebrew/bin/brew"), \
+             patch("subprocess.run", side_effect=side_effect):
+            brew_remove_old_formulae([tmp_path], None, console, dry_run=False)
+        uninstall_calls = [c for c in calls if "uninstall" in c]
+        assert uninstall_calls
+        args = uninstall_calls[0]
+        assert "python-tk@3.13" in args
+        assert "python@3.13" in args
+
+    def test_installs_new_companion_before_removing_old(self, tmp_path):
+        console = _make_console()
+        calls = []
+        def side_effect(cmd, **kwargs):
+            calls.append(list(cmd))
+            cmd_str = " ".join(str(c) for c in cmd)
+            if "list" in cmd_str and "versions" in cmd_str:
+                return MagicMock(stdout="python@3.14 3.14.5\npython@3.13 3.13.13\n")
+            if "uses" in cmd_str and "installed" in cmd_str:
+                return MagicMock(stdout="python-tk@3.13\n")
+            if "list" in cmd_str and "python-tk@3.14" in cmd_str:
+                return MagicMock(returncode=1, stdout="")  # NOT already installed
+            return MagicMock(returncode=0, stdout="")
+        with patch("shutil.which", return_value="/opt/homebrew/bin/brew"), \
+             patch("subprocess.run", side_effect=side_effect):
+            brew_remove_old_formulae([tmp_path], None, console, dry_run=False)
+        install_calls = [c for c in calls if "install" in c and "uninstall" not in c]
+        assert any("python-tk@3.14" in c for c in install_calls)
+        # install must come before uninstall
+        install_idx   = next(i for i, c in enumerate(calls) if "install" in c and "uninstall" not in c)
+        uninstall_idx = next(i for i, c in enumerate(calls) if "uninstall" in c)
+        assert install_idx < uninstall_idx
+
+    def test_dry_run_does_not_uninstall(self, tmp_path):
+        console = _make_console()
+        calls = []
+        def side_effect(cmd, **kwargs):
+            calls.append(list(cmd))
+            cmd_str = " ".join(str(c) for c in cmd)
+            if "list" in cmd_str and "versions" in cmd_str:
+                return MagicMock(stdout="python@3.14 3.14.5\npython@3.13 3.13.13\n")
+            if "uses" in cmd_str and "installed" in cmd_str:
+                return MagicMock(stdout="")
+            return MagicMock(returncode=0, stdout="")
+        with patch("shutil.which", return_value="/opt/homebrew/bin/brew"), \
+             patch("subprocess.run", side_effect=side_effect):
+            brew_remove_old_formulae([tmp_path], None, console, dry_run=True)
+        assert not any("uninstall" in " ".join(c) for c in calls)
 
 
 # ── pyenv_install_latest ──────────────────────────────────────────────────────
