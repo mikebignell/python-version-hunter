@@ -26,7 +26,10 @@ from pyhunter.actions import (
     suggest_pyenv_upgrade,
     upgrade_venv,
 )
-from pyhunter.auto import run_full_auto, brew_cleanup_old_pythons, brew_remove_old_formulae, find_chained_venvs
+from pyhunter.auto import (
+    run_full_auto, brew_cleanup_old_pythons, brew_remove_old_formulae,
+    find_chained_venvs, pyenv_cleanup,
+)
 from pyhunter.finder import find_all_pythons, PythonInstall
 from pyhunter.versions import CycleInfo, fetch_release_info, latest_patch_for, latest_stable_version
 from pyhunter.ui import (
@@ -240,6 +243,16 @@ def main(
             ),
         ),
     ] = False,
+    pyenv_cleanup_flag: Annotated[
+        bool,
+        typer.Option(
+            "--pyenv-cleanup",
+            help=(
+                "Upgrade pyenv itself, install the latest Python version, remove old/EOL "
+                "pyenv versions (migrates dependent venvs first), and warn if pyenv is empty."
+            ),
+        ),
+    ] = False,
     full_auto: Annotated[
         bool,
         typer.Option(
@@ -247,6 +260,16 @@ def main(
             help=(
                 "Full auto-remediation: upgrade Homebrew Python, repair broken venvs, "
                 "upgrade all venvs to the latest Python, and verify PATH + shell config."
+            ),
+        ),
+    ] = False,
+    full_auto_remove_redundant_pyenv: Annotated[
+        bool,
+        typer.Option(
+            "--full-auto-remove-redundant-pyenv",
+            help=(
+                "Use with --full-auto: if pyenv has no versions remaining after cleanup, "
+                "automatically uninstall pyenv itself."
             ),
         ),
     ] = False,
@@ -366,6 +389,19 @@ def main(
         )
         console.print()
 
+    # -- pyenv audit + cleanup --
+    if pyenv_cleanup_flag:
+        print_action_header("PYENV CLEANUP", console)
+        pyenv_cleanup(
+            venv_search_paths=venv_paths,
+            target_python=target_python or _best_python(installs),
+            cycles=cycles,
+            console=console,
+            dry_run=dry_run,
+            auto_remove=False,  # standalone flag never auto-removes; just warns
+        )
+        console.print()
+
     # -- Full auto mode --
     if full_auto:
         latest = latest_stable_version(cycles) if cycles else None
@@ -374,8 +410,10 @@ def main(
             latest_stable=latest,
             venv_search_paths=venv_paths,
             console=console,
+            cycles=cycles,
             dry_run=dry_run,
             yes=yes,
+            remove_redundant_pyenv=full_auto_remove_redundant_pyenv,
         )
         return
 

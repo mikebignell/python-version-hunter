@@ -119,15 +119,15 @@ pyhunter --full-auto
 
 This orchestrates a complete remediation in order:
 
-1. **`brew upgrade python`** — checks `brew outdated` first; skips entirely if already current. Upgrades only the latest minor-version formula (e.g. `python@3.14`); older formulae are skipped here and removed in step 5
-2. **`pyenv install <latest>`** — installs the newest Python if you use pyenv
+1. **`brew upgrade python`** — checks `brew outdated` first; skips entirely if already current. Upgrades only the latest minor-version formula (e.g. `python@3.14`); older formulae are skipped here and removed in step 6
+2. **pyenv upgrade + audit** — upgrades pyenv itself, installs the latest stable Python, removes old/EOL pyenv versions (migrating dependent venvs first). With `--full-auto-remove-redundant-pyenv`: if pyenv ends up empty, uninstalls pyenv too
 3. **Broken + chained venv repair** — finds venvs whose source Python was deleted *or* sourced from another venv (fragile coupling), and recreates them with a proper standalone Python
 4. **Upgrade all out-of-date venvs** — recreates every venv on an old cycle/patch, preserving packages + upgrading pip
 5. **Remove old Homebrew formulae** — migrates any remaining dependent venvs first; installs matching new-version companions (e.g. `python-tk@3.14`) before removing old ones (e.g. `python-tk@3.13`) so no functionality is lost; skips with a warning if an unrelated formula depends on the old Python
 6. **Homebrew Cellar cleanup** — runs `brew cleanup` to remove stale patch-level Cellar entries
-6. **PATH shadowing check** — verifies Homebrew Python comes before `/usr/bin/python3`
-7. **Shell config check** — warns if `brew shellenv` is missing from `.zshrc`/`.bash_profile`
-8. **`.python-version` scan** — flags pyenv pin files that point at EOL versions
+7. **PATH shadowing check** — verifies Homebrew Python comes before `/usr/bin/python3`
+8. **Shell config check** — warns if `brew shellenv` is missing from `.zshrc`/`.bash_profile`
+9. **`.python-version` scan** — flags pyenv pin files that point at EOL versions
 
 Skip the confirmation prompt:
 
@@ -139,6 +139,21 @@ Preview without making changes:
 
 ```bash
 pyhunter --full-auto --dry-run
+```
+
+### pyenv audit and cleanup
+
+Upgrade pyenv itself, install the latest stable Python, remove old/EOL versions (migrating dependent venvs first):
+
+```bash
+pyhunter --pyenv-cleanup
+pyhunter --pyenv-cleanup --dry-run   # preview what would change
+```
+
+If pyenv has no versions installed after cleanup, a warning is printed with the removal command. To remove pyenv automatically as part of `--full-auto`, use `--full-auto-remove-redundant-pyenv`:
+
+```bash
+pyhunter --full-auto --full-auto-remove-redundant-pyenv
 ```
 
 ### Homebrew Cellar cleanup
@@ -185,7 +200,9 @@ pyhunter --scan-path ~/Projects --scan-path ~/work
 | `--no-venvs` | | Skip virtual environment scanning |
 | `--brew-remove-old` | | Uninstall old Homebrew Python minor-version formulae (migrates venvs first) |
 | `--brew-cleanup` | | Remove stale Homebrew Cellar patch versions (upgrades dependent venvs first) |
+| `--pyenv-cleanup` | | Upgrade pyenv, install latest Python, remove old/EOL versions, warn if empty |
 | `--full-auto` | `-A` | Full automated remediation (upgrade, repair, verify, cleanup) |
+| `--full-auto-remove-redundant-pyenv` | | Use with `--full-auto`: auto-remove pyenv if it has no versions remaining |
 | `--yes` | `-y` | Skip confirmation prompts (use with `--full-auto`) |
 | `--version` | `-V` | Show version and exit |
 

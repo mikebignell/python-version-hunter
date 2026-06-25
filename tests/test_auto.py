@@ -10,13 +10,18 @@ import pytest
 from pyhunter.auto import (
     BrokenVenv,
     _parse_pyvenv_cfg,
+    _pyenv_root,
     brew_remove_old_formulae,
     brew_upgrade_python,
     check_path_shadowing,
     check_shell_config,
+    check_pyenv_empty,
     find_broken_venvs,
+    find_pyenv_installed_versions,
+    pyenv_cleanup,
     pyenv_install_latest,
     repair_broken_venv,
+    upgrade_pyenv_itself,
 )
 from pyhunter.finder import PythonInstall
 
@@ -341,3 +346,156 @@ class TestRepairBrokenVenv:
         venv_call = [c for c in [call[0][0] for call in mock_run.call_args_list]
                      if "-m" in c and "venv" in c]
         assert venv_call
+
+
+# ── pyenv management ──────────────────────────────────────────────────────────
+
+class TestFindPyenvInstalledVersions:
+    def test_returns_empty_when_no_versions_dir(self, tmp_path):
+        with patch("pyhunter.auto._pyenv_root", return_value=tmp_path):
+            assert find_pyenv_installed_versions() == []
+
+    def test_finds_python3_binary(self, tmp_path):
+        ver_dir = tmp_path / "versions" / "3.11.4" / "bin"
+        ver_dir.mkdir(parents=True)
+        (ver_dir / "python3").touch()
+        with patch("pyhunter.auto._pyenv_root", return_value=tmp_path):
+            result = find_pyenv_installed_versions()
+        assert len(result) == 1
+        assert result[0][0] == "3.11.4"
+
+    def test_finds_python_fallback(self, tmp_path):
+        ver_dir = tmp_path / "versions" / "3.9.7" / "bin"
+        ver_dir.mkdir(parents=True)
+        (ver_dir / "python").touch()
+        with patch("pyhunter.auto._pyenv_root", return_value=tmp_path):
+            result = find_pyenv_installed_versions()
+        assert result[0][0] == "3.9.7"
+
+    def test_skips_dir_without_python(self, tmp_path):
+        (tmp_path / "versions" / "3.10.0" / "bin").mkdir(parents=True)
+        with patch("pyhunter.auto._pyenv_root", return_value=tmp_path):
+            assert find_pyenv_installed_versions() == []
+
+
+class TestUpgradePyenvItself:
+    def test_no_pyenv_returns_false(self):
+        console = _make_console()
+        with patch("shutil.which", return_value=None):
+            assert upgrade_pyenv_itself(console) is False
+
+    def test_brew_already_up_to_date(self):
+        console = _make_console()
+        calls = []
+        def side_effect(cmd, **kwargs):
+            calls.append(list(cmd))
+            if "list" in " ".join(cmd) and "pyenv" in " ".join(cmd):
+                return MagicMock(returncode=0)
+            if "outdated" in " ".join(cmd):
+                return MagicMock(stdout="")  # pyenv not outdated
+            return MagicMock(returncode=0, stdout="")
+        with patch("shutil.which", return_value="/opt/homebrew/bin/pyenv"), \
+             patch("subprocess.run", side_effect=side_effect), \
+             patch("pyhunter.auto._pyenv_install_method", return_value="brew"):
+            result = upgrade_pyenv_itself(console)
+        assert result is True
+        assert not any("upgrade" in " ".join(c) for c in calls)
+
+    def test_brew_upgrades_when_outdated(self):
+        console = _make_console()
+        calls = []
+        def side_effect(cmd, **kwargs):
+            calls.append(list(cmd))
+            if "outdated" in " ".join(cmd):
+                return MagicMock(stdout="pyenv\n")
+            return MagicMock(returncode=0, stdout="")
+        with patch("shutil.which", return_value="/opt/homebrew/bin/pyenv"), \
+             patch("subprocess.run", side_effect=side_effect), \
+             patch("pyhunter.auto._pyenv_install_method", return_value="brew"):
+            upgrade_pyenv_itself(console, dry_run=False)
+        assert any("upgrade" in " ".join(c) and "pyenv" in " ".join(c) for c in calls)
+
+    def test_git_dry_run(self, tmp_path):
+        console = _make_console()
+        (tmp_path / ".git").mkdir()
+        with patch("shutil.which", return_value="/usr/local/bin/pyenv"), \
+             patch("pyhunter.auto._pyenv_install_method", return_value="git"), \
+             patch("pyhunter.auto._pyenv_root", return_value=tmp_path), \
+             patch("pyhunter.auto._run_visible") as mock_run:
+            result = upgrade_pyenv_itself(console, dry_run=True)
+        assert result is True
+        mock_run.assert_not_called()
+
+
+class TestCheckPyenvEmpty:
+    def test_does_nothing_when_versions_exist(self, tmp_path):
+        console = _make_console()
+        ver_dir = tmp_path / "versions" / "3.14.0" / "bin"
+        ver_dir.mkdir(parents=True)
+        (ver_dir / "python3").touch()
+        with patch("pyhunter.auto._pyenv_root", return_value=tmp_path), \
+             patch("shutil.which", return_value="/usr/bin/pyenv"):
+            check_pyenv_empty(console, dry_run=False, auto_remove=True)
+        # no exception = pass; nothing removed
+
+    def test_warns_when_empty_no_auto_remove(self, tmp_path):
+        console = _make_console()
+        (tmp_path / "versions").mkdir()
+        with patch("pyhunter.auto._pyenv_root", return_value=tmp_path), \
+             patch("shutil.which", return_value="/usr/bin/pyenv"), \
+             patch("pyhunter.auto._pyenv_install_method", return_value="other"):
+            check_pyenv_empty(console, dry_run=False, auto_remove=False)
+
+    def test_brew_auto_remove_dry_run(self, tmp_path):
+        console = _make_console()
+        (tmp_path / "versions").mkdir()
+        calls = []
+        with patch("pyhunter.auto._pyenv_root", return_value=tmp_path), \
+             patch("shutil.which", side_effect=lambda x: "/opt/homebrew/bin/" + x), \
+             patch("pyhunter.auto._pyenv_install_method", return_value="brew"), \
+             patch("pyhunter.auto._run_visible", side_effect=lambda cmd, c: calls.append(cmd)):
+            check_pyenv_empty(console, dry_run=True, auto_remove=True)
+        assert not calls  # dry run: no actual removal
+
+    def test_git_auto_remove(self, tmp_path):
+        console = _make_console()
+        (tmp_path / "versions").mkdir()
+        removed = []
+        with patch("pyhunter.auto._pyenv_root", return_value=tmp_path), \
+             patch("shutil.which", return_value="/usr/local/bin/pyenv"), \
+             patch("pyhunter.auto._pyenv_install_method", return_value="git"), \
+             patch("shutil.rmtree", side_effect=lambda p: removed.append(p)):
+            check_pyenv_empty(console, dry_run=False, auto_remove=True)
+        assert tmp_path in removed
+
+
+class TestPyenvCleanup:
+    def _make_cycles(self):
+        from pyhunter.versions import CycleInfo
+        return [
+            CycleInfo(cycle="3.14", latest="3.14.6", eol=False),
+            CycleInfo(cycle="3.13", latest="3.13.3", eol=False),
+            CycleInfo(cycle="3.9",  latest="3.9.21", eol="2025-10-05"),
+        ]
+
+    def test_no_pyenv_skips(self, tmp_path):
+        console = _make_console()
+        with patch("shutil.which", return_value=None):
+            pyenv_cleanup([tmp_path], None, self._make_cycles(), console)
+
+    def test_identifies_old_versions(self, tmp_path):
+        console = _make_console()
+        ver_dir_old = tmp_path / "versions" / "3.9.7" / "bin"
+        ver_dir_new = tmp_path / "versions" / "3.14.0" / "bin"
+        for d in (ver_dir_old, ver_dir_new):
+            d.mkdir(parents=True)
+            (d / "python3").touch()
+        removed = []
+        with patch("shutil.which", return_value="/usr/bin/pyenv"), \
+             patch("pyhunter.auto._pyenv_root", return_value=tmp_path), \
+             patch("pyhunter.auto.upgrade_pyenv_itself", return_value=True), \
+             patch("pyhunter.auto.remove_old_pyenv_version",
+                   side_effect=lambda v, *a, **kw: removed.append(v)):
+            pyenv_cleanup([tmp_path], None, self._make_cycles(), console, dry_run=True)
+        assert "3.9.7" in removed
+        assert "3.14.0" not in removed

@@ -629,7 +629,270 @@ def brew_cleanup_old_pythons(
     console.print("  [bright_green]✓ Cellar cleaned.[/bright_green]")
 
 
-# ── pyenv upgrade ─────────────────────────────────────────────────────────────
+# ── pyenv management ──────────────────────────────────────────────────────────
+
+def _pyenv_root() -> Path:
+    return Path(os.environ.get("PYENV_ROOT", "~/.pyenv")).expanduser()
+
+
+def _pyenv_install_method() -> str:
+    """Detect how pyenv was installed: 'brew', 'git', or 'other'."""
+    brew = shutil.which("brew")
+    if brew:
+        r = subprocess.run([brew, "list", "--formula", "pyenv"], capture_output=True, text=True)
+        if r.returncode == 0:
+            return "brew"
+    if (_pyenv_root() / ".git").exists():
+        return "git"
+    return "other"
+
+
+def upgrade_pyenv_itself(console: Console, dry_run: bool = False) -> bool:
+    """Upgrade pyenv itself before touching any versions."""
+    pyenv = shutil.which("pyenv")
+    if not pyenv:
+        console.print("  [bright_yellow]pyenv not found — skipping.[/bright_yellow]")
+        return False
+
+    method = _pyenv_install_method()
+    if method == "brew":
+        brew = shutil.which("brew")
+        outdated = subprocess.run([brew, "outdated", "--formula"], capture_output=True, text=True)
+        if "pyenv" not in outdated.stdout:
+            console.print("  [bright_green]✓ pyenv already up to date (Homebrew).[/bright_green]")
+            return True
+        console.print("  [bright_cyan]Upgrading pyenv via Homebrew…[/bright_cyan]")
+        if dry_run:
+            console.print("  [bright_yellow][DRY RUN] Would run: brew upgrade pyenv[/bright_yellow]")
+            return True
+        return _run_visible([brew, "upgrade", "pyenv"], console)
+
+    elif method == "git":
+        root = _pyenv_root()
+        console.print(f"  [bright_cyan]Updating pyenv via git pull ({root})…[/bright_cyan]")
+        if dry_run:
+            console.print(f"  [bright_yellow][DRY RUN] Would run: git -C {root} pull[/bright_yellow]")
+            return True
+        return _run_visible(["git", "-C", str(root), "pull"], console)
+
+    else:
+        console.print("  [dim]pyenv install method unknown — skipping self-upgrade.[/dim]")
+        return True
+
+
+def find_pyenv_installed_versions() -> list[tuple[str, Path]]:
+    """Return [(version_str, bin_path)] for all versions in ~/.pyenv/versions/."""
+    versions_dir = _pyenv_root() / "versions"
+    if not versions_dir.is_dir():
+        return []
+    results = []
+    for entry in sorted(versions_dir.iterdir()):
+        if not entry.is_dir():
+            continue
+        bin_path = entry / "bin" / "python3"
+        if not bin_path.exists():
+            bin_path = entry / "bin" / "python"
+        if bin_path.exists():
+            results.append((entry.name, bin_path))
+    return results
+
+
+def remove_old_pyenv_version(
+    version_str: str,
+    venv_search_paths: list[Path],
+    target_python: Optional[Path],
+    console: Console,
+    dry_run: bool = False,
+) -> None:
+    """Migrate any venvs using this pyenv version, then uninstall it."""
+    pyenv = shutil.which("pyenv")
+    if not pyenv:
+        return
+
+    version_root = str(_pyenv_root() / "versions" / version_str)
+    cellar_pattern = re.compile(re.escape(version_root))
+
+    # Find venvs whose home= points into this pyenv version
+    at_risk: list[Path] = []
+    for venv_root in venv_search_paths:
+        def _check(path: Path, depth: int) -> None:
+            if depth > 5:
+                return
+            try:
+                cfg = path / "pyvenv.cfg"
+                if cfg.is_file():
+                    data = _parse_pyvenv_cfg(cfg)
+                    if cellar_pattern.search(data.get("home", "")):
+                        at_risk.append(path.resolve())
+                    return
+                for entry in path.iterdir():
+                    try:
+                        if entry.is_dir() and not entry.name.startswith(".") \
+                                and not entry.is_symlink() \
+                                and entry.name not in _SCAN_SKIP_DIRS:
+                            _check(entry, depth + 1)
+                    except _SCAN_ERRORS:
+                        continue
+            except _SCAN_ERRORS:
+                pass
+        if venv_root.is_dir():
+            _check(venv_root, 0)
+
+    if at_risk:
+        console.print(
+            f"  [bright_yellow]⚠  {len(at_risk)} venv(s) reference pyenv {version_str} — "
+            f"migrating before removal:[/bright_yellow]"
+        )
+        from pyhunter.finder import PythonInstall, scan_venvs
+        venv_results = scan_venvs(venv_search_paths)
+        for venv_path in at_risk:
+            matches = [r for r in venv_results if r[1] == venv_path]
+            if matches:
+                py_path, venv_base, ver_str, install_type = matches[0]
+                ver_tuple = tuple(int(x) for x in ver_str.split(".")) if ver_str else (0, 0, 0)
+                inst = PythonInstall(
+                    path=py_path,
+                    version=ver_tuple,
+                    version_str=ver_str or "?",
+                    install_type=install_type,
+                    venv_base=venv_base,
+                )
+                upgrade_venv_with_pip(inst, target_python, console, dry_run=dry_run)
+
+    if dry_run:
+        console.print(f"  [bright_yellow][DRY RUN] Would run: pyenv uninstall -f {version_str}[/bright_yellow]")
+    else:
+        console.print(f"  [bright_cyan]Uninstalling pyenv Python {version_str}…[/bright_cyan]")
+        _run_visible([pyenv, "uninstall", "-f", version_str], console)
+
+
+def check_pyenv_empty(
+    console: Console,
+    dry_run: bool = False,
+    auto_remove: bool = False,
+) -> None:
+    """If pyenv is installed but has no versions, warn or remove it."""
+    pyenv = shutil.which("pyenv")
+    if not pyenv:
+        return
+
+    versions = find_pyenv_installed_versions()
+    if versions:
+        return
+
+    console.print(
+        "  [bright_yellow]⚠  pyenv is installed but has no Python versions.[/bright_yellow]"
+    )
+
+    if not auto_remove:
+        method = _pyenv_install_method()
+        if method == "brew":
+            console.print("  [dim]Remove it with: brew uninstall pyenv[/dim]")
+        elif method == "git":
+            console.print(f"  [dim]Remove it with: rm -rf {_pyenv_root()}[/dim]")
+        return
+
+    # auto_remove=True: --full-auto-remove-redundant-pyenv was passed
+    method = _pyenv_install_method()
+    if method == "brew":
+        brew = shutil.which("brew")
+        if dry_run:
+            console.print("  [bright_yellow][DRY RUN] Would run: brew uninstall pyenv[/bright_yellow]")
+        else:
+            console.print("  [bright_cyan]Removing pyenv (no versions remain)…[/bright_cyan]")
+            _run_visible([brew, "uninstall", "pyenv"], console)
+    elif method == "git":
+        root = _pyenv_root()
+        if dry_run:
+            console.print(f"  [bright_yellow][DRY RUN] Would remove: {root}[/bright_yellow]")
+        else:
+            console.print(f"  [bright_cyan]Removing pyenv directory {root}…[/bright_cyan]")
+            import shutil as _shutil
+            try:
+                _shutil.rmtree(root)
+                console.print("  [bright_green]✓ pyenv removed.[/bright_green]")
+            except OSError as e:
+                console.print(f"  [bright_red]Could not remove {root}: {e}[/bright_red]")
+    else:
+        console.print("  [dim]Cannot determine install method — remove pyenv manually.[/dim]")
+
+
+def pyenv_cleanup(
+    venv_search_paths: list[Path],
+    target_python: Optional[Path],
+    cycles,
+    console: Console,
+    dry_run: bool = False,
+    auto_remove: bool = False,
+) -> None:
+    """
+    Full pyenv audit: upgrade pyenv, scan installed versions, remove EOL/old
+    ones after migrating dependent venvs. Optionally remove pyenv if empty.
+    """
+    from pyhunter.finder import EOL_VERSIONS, SECURITY_VERSIONS
+
+    pyenv = shutil.which("pyenv")
+    if not pyenv:
+        console.print("  [bright_yellow]pyenv not found — skipping.[/bright_yellow]")
+        return
+
+    # 1. Upgrade pyenv itself first
+    upgrade_pyenv_itself(console, dry_run=dry_run)
+    console.print()
+
+    # 2. Scan installed versions
+    installed = find_pyenv_installed_versions()
+    if not installed:
+        console.print("  [bright_yellow]No Python versions installed via pyenv.[/bright_yellow]")
+        check_pyenv_empty(console, dry_run=dry_run, auto_remove=auto_remove)
+        return
+
+    console.print(f"  [bright_cyan]Installed pyenv versions:[/bright_cyan] {', '.join(v for v, _ in installed)}")
+
+    # 3. Classify: old (EOL or has a newer cycle available) vs current
+    old_versions: list[str] = []
+    current_versions: list[str] = []
+    latest_cycle: Optional[tuple[int, int]] = None
+
+    if cycles:
+        from pyhunter.versions import CycleInfo
+        active = [c for c in cycles if not c.is_eol]
+        if active:
+            latest_cycle = max(c.major_minor for c in active)
+
+    for ver_str, _ in installed:
+        parts = ver_str.split(".")
+        if len(parts) < 2:
+            current_versions.append(ver_str)
+            continue
+        try:
+            mm = (int(parts[0]), int(parts[1]))
+        except ValueError:
+            current_versions.append(ver_str)
+            continue
+
+        if mm in EOL_VERSIONS:
+            old_versions.append(ver_str)
+        elif latest_cycle and mm < latest_cycle:
+            old_versions.append(ver_str)
+        else:
+            current_versions.append(ver_str)
+
+    if current_versions:
+        console.print(f"  [bright_green]✓ Current:[/bright_green] {', '.join(current_versions)}")
+    if old_versions:
+        console.print(f"  [bright_yellow]Old/EOL:[/bright_yellow] {', '.join(old_versions)}")
+
+    # 4. Remove old versions
+    for ver_str in old_versions:
+        console.print()
+        console.print(f"  [bright_cyan]Removing old pyenv version {ver_str}…[/bright_cyan]")
+        remove_old_pyenv_version(ver_str, venv_search_paths, target_python, console, dry_run=dry_run)
+
+    # 5. Check if now empty
+    if not dry_run:
+        check_pyenv_empty(console, dry_run=dry_run, auto_remove=auto_remove)
+
 
 def pyenv_install_latest(latest: str, console: Console, dry_run: bool = False) -> bool:
     """Install the latest Python via pyenv and set it as global default."""
@@ -719,8 +982,10 @@ def run_full_auto(
     latest_stable: Optional[str],
     venv_search_paths: list[Path],
     console: Console,
+    cycles=None,
     dry_run: bool = False,
     yes: bool = False,
+    remove_redundant_pyenv: bool = False,
 ) -> None:
     from rich.prompt import Confirm
 
@@ -744,8 +1009,8 @@ def run_full_auto(
     if has_brew:
         console.print(f"  [bright_green]{step}.[/bright_green] brew upgrade python  (all installed Python formulae)")
         step += 1
-    if has_pyenv and latest_stable:
-        console.print(f"  [bright_green]{step}.[/bright_green] pyenv install {latest_stable} && pyenv global {latest_stable}")
+    if has_pyenv:
+        console.print(f"  [bright_green]{step}.[/bright_green] Upgrade pyenv itself, install {latest_stable or 'latest'}, remove old/EOL versions" + (" + remove pyenv if empty" if remove_redundant_pyenv else ""))
         step += 1
 
     console.print(f"  [bright_green]{step}.[/bright_green] Scan for broken venvs (source Python deleted)")
@@ -790,9 +1055,19 @@ def run_full_auto(
                         break
 
     # ── Step 2: pyenv ─────────────────────────────────────────────────────
-    if has_pyenv and latest_stable:
-        _header("STEP: PYENV INSTALL LATEST")
-        pyenv_install_latest(latest_stable, console, dry_run=dry_run)
+    if has_pyenv:
+        _header("STEP: PYENV — UPGRADE + AUDIT")
+        if latest_stable:
+            pyenv_install_latest(latest_stable, console, dry_run=dry_run)
+            console.print()
+        pyenv_cleanup(
+            venv_search_paths=venv_search_paths,
+            target_python=None,  # resolved after brew step above
+            cycles=cycles,
+            console=console,
+            dry_run=dry_run,
+            auto_remove=remove_redundant_pyenv,
+        )
 
     # ── Determine best target Python ──────────────────────────────────────
     from pyhunter.finder import find_all_pythons

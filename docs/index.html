@@ -453,6 +453,11 @@
         <span class="feature-desc">Uninstalls old Homebrew minor-version formulae (e.g. python@3.13) once all venvs have been migrated to the latest.</span>
       </div>
       <div class="feature-card">
+        <span class="feature-icon">🐍</span>
+        <span class="feature-name">PYENV AUDIT</span>
+        <span class="feature-desc">Upgrades pyenv itself, installs the latest Python, removes old/EOL versions with venv migration. Warns (or auto-removes) if pyenv ends up empty.</span>
+      </div>
+      <div class="feature-card">
         <span class="feature-icon">🕹️</span>
         <span class="feature-name">INTERACTIVE MODE</span>
         <span class="feature-desc">Step through each problem installation and decide: upgrade, delete, suggest, or skip.</span>
@@ -480,6 +485,8 @@
 <span class="prompt">$</span> <span class="cmd">pyhunter --interactive</span>           <span class="out"># decide for each issue</span>
 
 <span class="prompt">$</span> <span class="cmd">pyhunter --upgrade-venvs</span>         <span class="out"># auto-upgrade all EOL venvs</span>
+
+<span class="prompt">$</span> <span class="cmd">pyhunter --pyenv-cleanup</span>         <span class="out"># upgrade pyenv + remove old/EOL versions</span>
 
 <span class="prompt">$</span> <span class="cmd">pyhunter --brew-remove-old</span>       <span class="out"># remove old minor-version formulae (python@3.13 etc.)</span>
 
@@ -526,14 +533,15 @@
       </div>
     </div>
     <ul>
-      <li><strong>Step 1 — Homebrew upgrade:</strong> checks <code>brew outdated</code> first — skips entirely if already current; otherwise upgrades only the latest minor-version formula (e.g. <code>python@3.14</code>); older formulae like <code>python@3.13</code> are skipped here and removed in step 5</li>
-      <li><strong>Step 2 — pyenv install:</strong> installs the latest stable Python via pyenv and sets it as global default (if pyenv is present)</li>
+      <li><strong>Step 1 — Homebrew upgrade:</strong> checks <code>brew outdated</code> first — skips entirely if already current; otherwise upgrades only the latest minor-version formula (e.g. <code>python@3.14</code>); older formulae like <code>python@3.13</code> are skipped here and removed in step 6</li>
+      <li><strong>Step 2 — pyenv upgrade + audit:</strong> upgrades pyenv itself (via Homebrew or <code>git pull</code>), installs the latest stable Python, then removes any old or EOL pyenv versions — migrating dependent venvs first. With <code>--full-auto-remove-redundant-pyenv</code>: if pyenv ends up with no versions, uninstalls pyenv itself</li>
       <li><strong>Step 3 — Broken + chained venv repair:</strong> finds venvs whose source Python was deleted from disk, or that are sourced from another venv's Python (fragile coupling) — rebuilds them with a proper standalone Python</li>
       <li><strong>Step 4 — Upgrade out-of-date venvs:</strong> recreates every venv on an old cycle or patch, preserving all packages; each line shows <strong>old version → new version</strong> for compliance reporting</li>
-      <li><strong>Step 5 — Remove old Homebrew formulae:</strong> migrates any remaining venvs still referencing old formulae (e.g. <code>python@3.13</code>); automatically installs matching new-version companions (e.g. <code>python-tk@3.14</code>) before removing old ones (e.g. <code>python-tk@3.13</code>) so no functionality is lost; skips with a warning if an unrelated formula depends on the old Python</li>
+      <li><strong>Step 5 — Remove old Homebrew formulae:</strong> migrates any remaining venvs still referencing old formulae (e.g. <code>python@3.13</code>); automatically installs matching new-version companions (e.g. <code>python-tk@3.14</code>) before removing old ones so no functionality is lost; skips with a warning if an unrelated formula depends on the old Python</li>
       <li><strong>Step 6 — Homebrew Cellar cleanup:</strong> checks for any remaining venvs still referencing old Cellar paths, upgrades them, then runs <code>brew cleanup</code> to free disk space</li>
       <li><strong>Step 7 — PATH shadowing check:</strong> verifies <code>which python3</code> resolves to Homebrew, not <code>/usr/bin/python3</code></li>
       <li><strong>Step 8 — Shell config check:</strong> warns if <code>brew shellenv</code> is missing from <code>~/.zshrc</code> / <code>~/.bash_profile</code>; also scans for <code>.python-version</code> files pinning EOL versions</li>
+      <li><strong>Optional — <code>--full-auto-remove-redundant-pyenv</code>:</strong> if pyenv has no versions remaining after the audit, automatically uninstalls pyenv itself</li>
     </ul>
   </section>
 
