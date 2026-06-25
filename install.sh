@@ -61,19 +61,30 @@ if [ -z "$PYTHON" ]; then
   exit 1
 fi
 
-# ── 2. Create a dedicated venv ────────────────────────────────────────────────
-info "Creating venv at ${INSTALL_DIR}…"
+# ── 2. Create or reuse venv ───────────────────────────────────────────────────
+IS_UPDATE=false
 if [ -d "$INSTALL_DIR" ]; then
-  warn "Directory already exists — reinstalling into ${INSTALL_DIR}"
+  IS_UPDATE=true
+  info "Existing installation found at ${INSTALL_DIR} — updating…"
+else
+  info "Creating venv at ${INSTALL_DIR}…"
 fi
 "$PYTHON" -m venv "$INSTALL_DIR"
-ok "Venv created."
+$IS_UPDATE || ok "Venv created."
 
-# ── 3. Install pyhunter ───────────────────────────────────────────────────────
-info "Installing pyhunter…"
+# ── 3. Install / update pyhunter ─────────────────────────────────────────────
+if $IS_UPDATE; then
+  info "Updating pyhunter to latest…"
+else
+  info "Installing pyhunter…"
+fi
 "${INSTALL_DIR}/bin/pip" install --quiet --no-cache-dir --upgrade pip
-"${INSTALL_DIR}/bin/pip" install --quiet --no-cache-dir "git+${REPO}"
-ok "pyhunter installed."
+"${INSTALL_DIR}/bin/pip" install --quiet --no-cache-dir --upgrade "git+${REPO}"
+if $IS_UPDATE; then
+  ok "pyhunter updated."
+else
+  ok "pyhunter installed."
+fi
 
 # ── 4. Shell PATH advice ──────────────────────────────────────────────────────
 BIN="${INSTALL_DIR}/bin"
